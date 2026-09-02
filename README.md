@@ -345,12 +345,44 @@ T103은 불일치를 감춘 채 통과시키지 않고 **`high` 로 기록해 �
 
 ## 10. 실행
 
+**Python 3.9 이상** 이 필요하다. 외부 의존성은 없다(표준 라이브러리만 사용).
+
+### macOS · Linux
+
 ```bash
 python3 src/cli.py
 ```
 
+### Windows
+
+윈도우에는 `python3` 명령이 없다. `python` 또는 `py` 런처를 쓴다.
+
+```bat
+python src/cli.py
+```
+
+```bat
+py -3 src/cli.py
+```
+
 리포트 출력 후 `data/sample/expected_results.csv` 와 대조한다. 불일치가 있으면
 종료 코드 1을 반환한다.
+
+### 윈도우 한국어 콘솔의 인코딩
+
+이 리포트는 `—`(U+2014) 와 `⚠`(U+26A0) 을 쓴다. 한국어 윈도우의 기본 콘솔
+인코딩인 cp949 에는 두 글자가 모두 없어, 아무 처리도 하지 않으면 리포트 첫 줄에서
+`UnicodeEncodeError` 로 죽는다. 그래서 `src/cli.py` 는 시작 시 표준 출력·표준
+오류를 UTF-8 로 재설정한다.
+
+이것으로 예외는 사라지지만, **화면에 글자가 제대로 보이는지는 콘솔의 코드페이지에
+달려 있다.** Windows Terminal 이나 최신 PowerShell 에서는 그대로 표시된다.
+구형 `cmd.exe` 에서 글자가 깨진다면 실행 전에 코드페이지를 UTF-8 로 바꾼다.
+
+```bat
+chcp 65001
+python src/cli.py
+```
 
 ### 룰과 코드의 결합 지점
 
