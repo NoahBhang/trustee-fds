@@ -10,7 +10,7 @@
 
 rule_id: art391-4-gratuitous
 version: 0.1.0
-status: draft                    # draft | legal_reviewed | production
+status: draft                    # draft | spec_verified | legal_reviewed | production
 last_updated: 2026-09-02
 
 # 이 룰은 특수관계인 분류 결과를 입력으로 받는다.
