@@ -9,6 +9,13 @@ from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# 윈도우 한국어 콘솔(cp949)에는 이 리포트가 쓰는 '—'(U+2014) 와 '⚠'(U+26A0) 이
+# 없어, 그대로 두면 리포트 첫 줄에서 UnicodeEncodeError 로 죽는다.
+# 파일 입출력은 각 open() 에서 이미 encoding 을 명시하므로 출력만 맞추면 된다.
+if hasattr(sys.stdout, "reconfigure"):        # Python 3.7+
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def won(v):
     return "산출 불가" if v is None else f"{v:,.0f}원"
