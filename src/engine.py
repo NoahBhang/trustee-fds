@@ -91,6 +91,7 @@ class Dataset:
     transactions: list                              # transaction_row[]
     parties: dict                                   # (case_id, party_id) → party_row
     links: list                                     # transaction_parties row[]
+    tx_links: list = field(default_factory=list)     # transaction_links row[] (자금 흐름)
     integrity_issues: list[IntegrityIssue] = field(default_factory=list)
 
     @classmethod
@@ -103,6 +104,8 @@ class Dataset:
         transactions_rows = _rows(d / "transactions.csv")
         parties_rows = _rows(d / "parties.csv")
         links_rows = _rows(d / "transaction_parties.csv")
+        tx_links_path = d / "transaction_links.csv"
+        tx_links_rows = _rows(tx_links_path) if tx_links_path.exists() else []
         
         # 복합 키로 parties 로드
         ds = cls(
@@ -110,6 +113,7 @@ class Dataset:
             transactions=transactions_rows,
             parties={(r["case_id"], r["party_id"]): r for r in parties_rows},
             links=links_rows,
+            tx_links=tx_links_rows,
         )
         
         # 로드 직후 무결성 검사 수행
@@ -126,6 +130,16 @@ class Dataset:
                 if l["transaction_id"] == tx_id and l["role"] == role
                 and (case_id, l["party_id"]) in self.parties]
 
+    def inbound_fund_flows(self, case_id, tx_id):
+        """
+        이 거래를 to_transaction_id 로 하는 funds_flow 링크들을 반환.
+        case_id 를 명시적으로 요구해 교차 사건 오염을 막는다 (parties_of() 와 같은 이유).
+        """
+        return [l for l in self.tx_links
+                if l["case_id"] == case_id
+                and l["to_transaction_id"] == tx_id
+                and l["link_type"] == "funds_flow"]
+
     def _check_all_integrity(self) -> list[IntegrityIssue]:
         """모든 무결성 검사를 수행하고 문제 목록을 반환."""
         issues = []
@@ -136,6 +150,9 @@ class Dataset:
         issues += self._check_duplicate_keys()
         issues += self._check_case_id_coverage()
         issues += self._check_share_ratio_sum()
+        issues += self._check_tx_link_references()
+        issues += self._check_tx_link_temporal_order()
+        issues += self._check_tx_link_self_reference()
         return issues
 
     def _check_party_id_references(self) -> list[IntegrityIssue]:
@@ -360,6 +377,107 @@ class Dataset:
         # 현재는 구현하지 않음 (transaction_parties에 share_ratio 필드 추가 필요)
         return []
 
+    def _check_tx_link_references(self) -> list[IntegrityIssue]:
+        """
+        transaction_links 참조 무결성:
+        - from/to transaction_id 가 transactions 에 존재하는가
+        - from/to 거래가 모두 link.case_id 와 일치하는가 (교차 사건 오염 방지)
+        parties_of() 와 같은 이유로 case_id 를 명시적으로 요구한다.
+        """
+        issues = []
+        tx_by_id = {t["transaction_id"]: t for t in self.transactions}
+        orphan, cross_contam = [], []
+
+        for l in self.tx_links:
+            from_tx = tx_by_id.get(l["from_transaction_id"])
+            to_tx = tx_by_id.get(l["to_transaction_id"])
+
+            if from_tx is None or to_tx is None:
+                orphan.append({
+                    "link_id": l["link_id"],
+                    "from_transaction_id": l["from_transaction_id"],
+                    "to_transaction_id": l["to_transaction_id"],
+                    "missing": ("from" if from_tx is None else "") +
+                               ("," if from_tx is None and to_tx is None else "") +
+                               ("to" if to_tx is None else "")
+                })
+                continue
+
+            if from_tx["case_id"] != l["case_id"] or to_tx["case_id"] != l["case_id"]:
+                cross_contam.append({
+                    "link_id": l["link_id"],
+                    "link_case_id": l["case_id"],
+                    "from_case_id": from_tx["case_id"],
+                    "to_case_id": to_tx["case_id"],
+                })
+
+        if orphan:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.WARNING,
+                message="존재하지 않는 거래를 참조하는 transaction_links",
+                details=orphan
+            ))
+        if cross_contam:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="link.case_id 와 참조 거래의 case_id 가 불일치 (교차 사건 오염)",
+                details=cross_contam
+            ))
+        return issues
+
+    def _check_tx_link_temporal_order(self) -> list[IntegrityIssue]:
+        """
+        자금은 미래에서 과거로 흐를 수 없다.
+        from 거래일 > to 거래일이면 데이터 입력 오류가 확실하다.
+        """
+        issues = []
+        tx_by_id = {t["transaction_id"]: t for t in self.transactions}
+        reversed_links = []
+
+        for l in self.tx_links:
+            from_tx = tx_by_id.get(l["from_transaction_id"])
+            to_tx = tx_by_id.get(l["to_transaction_id"])
+            if from_tx is None or to_tx is None:
+                continue  # _check_tx_link_references 에서 이미 잡음
+
+            fd, td = _date(from_tx["transaction_date"]), _date(to_tx["transaction_date"])
+            if fd and td and fd > td:
+                reversed_links.append({
+                    "link_id": l["link_id"],
+                    "from_transaction_id": l["from_transaction_id"],
+                    "from_date": str(fd),
+                    "to_transaction_id": l["to_transaction_id"],
+                    "to_date": str(td),
+                })
+
+        if reversed_links:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="시간 역행 링크 — from 거래일이 to 거래일보다 늦음",
+                details=reversed_links
+            ))
+        return issues
+
+    def _check_tx_link_self_reference(self) -> list[IntegrityIssue]:
+        """자기 자신을 참조하는 링크."""
+        issues = []
+        self_refs = [
+            {"link_id": l["link_id"], "transaction_id": l["from_transaction_id"]}
+            for l in self.tx_links
+            if l["from_transaction_id"] == l["to_transaction_id"]
+        ]
+        if self_refs:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="자기 자신을 참조하는 transaction_links",
+                details=self_refs
+            ))
+        return issues
+
 
 def load_rules(root: Path):
     rules = {}
@@ -472,6 +590,48 @@ def undervalue_verdict(tx, ratio, rule):
     return "candidate" if ratio <= 0.50 else "not_candidate"
 
 
+def evaluate_funds_circled_back(ds, case_id, tx, rule):
+    """
+    이 거래로 자금이 흘러들어온(inbound funds_flow) 링크가 있는지, 그리고
+    그것이 신호로 인정되는지 판정한다. 링크는 사실, 이 함수는 판단.
+
+    반환: (circled_back: bool, flags: list[str])
+    """
+    ffa = rule.get("fund_flow_analysis")
+    if not ffa:
+        return False, []
+
+    min_confidence = ffa["min_confidence"]
+    confidence_rank = {"alleged": 0, "probable": 1, "verified": 2}
+    min_rank = confidence_rank[min_confidence]
+    window = ffa["proximity_window_days"]
+    td = _date(tx["transaction_date"])
+
+    circled_back = False
+    flags = []
+
+    for link in ds.inbound_fund_flows(case_id, tx["transaction_id"]):
+        if confidence_rank.get(link["confidence"], -1) < min_rank:
+            continue  # alleged 등 최소 신뢰도 미달 — 신호로 세우지 않는다
+
+        from_tx = next((t for t in ds.transactions
+                         if t["transaction_id"] == link["from_transaction_id"]), None)
+        if from_tx is None:
+            continue  # 무결성 검사가 별도로 잡는다
+
+        fd = _date(from_tx["transaction_date"])
+        if fd is None or td is None:
+            continue
+
+        gap_days = (td - fd).days
+        if gap_days <= window:
+            circled_back = True
+        else:
+            flags.append(ffa["outside_window_flag"])  # 배제하지 않고 표시만 (soft)
+
+    return circled_back, flags
+
+
 # ------------------------------------------------------------ 신호 술어
 
 PREDICATES = {}
@@ -511,8 +671,7 @@ def _p5(c): return "related" in c["pd_verdicts"]
 
 @predicate("funds_circled_back")
 def _p6(c):
-    # 거래 간 연결 테이블이 아직 없다. 로드맵 4단계.
-    return False
+    return c["funds_circled_back"]
 
 
 @predicate("non_cash_waiver")
@@ -629,8 +788,11 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         res.reached = "ranking"
         res.candidate = True
         res.priority = "unresolved" if verdict == "unresolved" else triage(ratio, rule)
+        circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule)
+        res.flags += ff_flags
         ctx = dict(tx=tx, value_in=vi, value_out=vo, cp_verdicts=cp_v, pd_verdicts=pd_v,
-                   counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor)
+                   counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor,
+                   funds_circled_back=circled_back)
         res.signals = [s["id"] for s in rule["priority_signals"] if PREDICATES[s["id"]](ctx)]
         results.append(res)
 

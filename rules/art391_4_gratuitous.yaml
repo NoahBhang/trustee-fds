@@ -193,6 +193,29 @@ economic_substance:
       출력문에서 이 임계값을 '법정 기준' 으로 표현하는 것.
 
 # -----------------------------------------------------------------------------
+# 자금 흐름 분석 (로드맵 4단계 — 1-hop 직접 연결만 구현)
+# -----------------------------------------------------------------------------
+# transaction_links 는 사실(계좌 추적으로 확인된 거래 간 연결)만 담는다.
+# "환류로 볼 것인가"는 판단이므로 아래 설정에 따라 이 룰이 판정한다.
+#
+# 다단계 연쇄(T001→T005→T021 같은 체인)는 여기 포함하지 않는다.
+# 검증할 판례·기준이 아직 없는 상태에서 구현하면 추측이지 판정이 아니다.
+# 1-hop 으로 먼저 검증하고, 그 위에 얹는다 (로드맵 4-b).
+fund_flow_analysis:
+  min_confidence: probable
+  # alleged(진술뿐)는 신호로 인정하지 않는다. payment_verified != Y 인 대가를
+  # 0으로 처리하는 것과 같은 원칙 — 근거 없는 진술만으로 신호를 세우지 않는다.
+  eligible_link_types: [funds_flow]
+  # same_asset(동일 자산 회귀)은 별도 술어(asset_returned, 미구현)로 분리한다.
+  # 부동산은 등기부로, 등록 동산(자동차 등)은 등록 이력으로 추적 가능하지만
+  # 그 외 동산은 진술 의존도가 높아 증거 방식이 근본적으로 다르기 때문이다.
+  proximity_window_days: 90
+  # 조문 근거 아님 — 경험칙. 하드 필터가 아니다: 창을 넘겨도 배제하지 않고
+  # 신호를 약화한다 (behavior: soft). upper_bound.behavior 와 같은 패턴.
+  behavior: soft
+  outside_window_flag: funds_flow_delayed
+
+# -----------------------------------------------------------------------------
 # 우선순위 신호 (가점이 아니라 '중첩 표시')
 # -----------------------------------------------------------------------------
 # 점수는 부인 성립 확률도, 승소 확률도 아니다. 독립 신호의 중첩 정도일 뿐이다.
@@ -213,7 +236,10 @@ priority_signals:
     when: 'related_party.verdict_for(role="principal_debtor") == "related"'
     label: "주채무자가 특수관계인 — 조사 신호일 뿐 소급기간을 바꾸지 않음"
   - id: funds_circled_back
-    when: "downstream_transfer_to_related_party == true"
+    when: >
+      transaction_links 에 이 거래를 to_transaction_id 로 하는 funds_flow 링크가
+      있고, confidence >= fund_flow_analysis.min_confidence 이며,
+      from 거래일과의 간격이 proximity_window_days 이내
     label: "거래 직후 자금이 관계인에게 환류"
   - id: non_cash_waiver
     when: "right_waiver_type != null"

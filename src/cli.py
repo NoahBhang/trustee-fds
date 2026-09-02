@@ -144,6 +144,17 @@ def validate(results):
         if ts and STAGE_ORDER.get(ts, 0) > STAGE_ORDER.get(r.reached, 0):
             unreachable.append((tid, ts, r.reached, r.drop_reason or "-"))
 
+        # target_stage == signal 케이스는 신호 자체를 검증한다.
+        # expected_flags 컬럼은 다른 행에서 미구현 라벨(routed_to_* 등)도
+        # 섞여 있어 전체를 강제 대조하면 무관한 오탐이 쏟아진다.
+        # 신호 검증이 실제로 필요한 signal 단계에서만 좁게 확인한다.
+        if ts == "signal":
+            expected_signals = [s.strip() for s in e.get("expected_flags", "").split(";") if s.strip()]
+            missing_signals = [s for s in expected_signals if s not in r.signals]
+            if missing_signals:
+                mismatches.append((tid, "신호", ";".join(expected_signals),
+                                   f"누락: {', '.join(missing_signals)} (실제: {', '.join(r.signals) or '-'})"))
+
     print("=" * 74)
     print("기대값 대조")
     print("=" * 74)

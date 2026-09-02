@@ -19,7 +19,7 @@ T017,economic,N,6,,new_loan_offset,collateral_provision 으로 정규화. 대가
 T018,action,N,,,,일상 지출
 T019,action,N,,,,일상 지출
 T020,action,N,,,,일상 지출
-T021,signal,Y,12,unresolved,funds_circled_back;related_counterparty,value_out 산출 불가 → unresolved. 환류는 거래 간 링크(로드맵 4단계)가 있어야 잡힌다
+T021,signal,Y,12,unresolved,funds_circled_back;related_counterparty,value_out 산출 불가 → unresolved. transaction_links L001(T001→T021, 1일, probable)로 환류 신호 확인됨
 T022,action,Y,6,high,no_consideration,시효이익 포기로 소극재산 증가 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
 T101,temporal,Y,6,high,role_split_guarantee;no_consideration;related_principal_debtor,핵심 테스트 — 주채무자만 특수관계이므로 1년 특칙 적용 금지
 T102,temporal,Y,12,high,related_counterparty;no_consideration,법률행위 상대방이 특수관계 법인 — 1년 창 적용
