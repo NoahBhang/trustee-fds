@@ -403,6 +403,17 @@ py -3 src/cli.py
 리포트 출력 후 `data/sample/expected_results.csv` 와 대조한다. 불일치가 있으면
 종료 코드 1을 반환한다.
 
+### 회귀 확인
+
+합격 여부는 리포트 중간의 `케이스 N건 중 불일치 0건` 줄과 종료 코드로 판단한다.
+출력 끝부분만 봐서는(`tail`) 이 줄이 보이지 않고, 파이프 뒤의 `$?` 는 `cli.py` 가
+아니라 파이프 마지막 명령의 종료 코드다.
+
+```bash
+python3 src/cli.py; echo $?                    # 불일치가 있으면 1
+python3 src/cli.py | grep -E '불일치|미도달'    # 두 카운트만 확인
+```
+
 ### 윈도우 한국어 콘솔의 인코딩
 
 이 리포트는 `—`(U+2014) 와 `⚠`(U+26A0) 을 쓴다. 한국어 윈도우의 기본 콘솔
@@ -417,6 +428,16 @@ py -3 src/cli.py
 ```bat
 chcp 65001
 python src/cli.py
+```
+
+### 인코딩 회귀 검사 (macOS · Linux)
+
+Windows 없이도 cp949 환경을 흉내 내 `cli.py` 의 UTF-8 재설정이 살아 있는지
+확인할 수 있다. `sys.stdout.reconfigure` 호출을 지우면 이 명령이 첫 줄의
+`—`(U+2014) 에서 `UnicodeEncodeError` 로 죽어 종료 코드 1이 된다.
+
+```bash
+PYTHONIOENCODING=cp949 python3 src/cli.py > /dev/null 2>&1; echo $?   # 0 이어야 정상
 ```
 
 ### 룰과 코드의 결합 지점
