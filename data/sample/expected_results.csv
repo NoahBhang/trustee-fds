@@ -1,0 +1,32 @@
+transaction_id,target_stage,expected_candidate,expected_lookback_months,expected_priority,expected_flags,rationale
+T001,economic,Y,12,high,payment_unverified;related_counterparty;no_consideration_paid,대가비율 0.0000 — action_type=sale 로 통일했으므로 3단계에서 판정된다
+T002,temporal,Y,12,high,no_consideration;related_counterparty,전형적 무상행위
+T003,temporal,Y,12,high,no_consideration;related_counterparty;boundary_case,1년 창 안쪽 경계 2일 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T004,temporal,N,12,,boundary_case,1년 창 바깥 2일 — 경계 표시만
+T005,temporal,Y,6,high,no_consideration,일반 상대방 6월 창 안 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T006,temporal,N,6,,boundary_case,6월 창 바깥 2일
+T007,action,Y,6,high,no_consideration;non_cash_waiver,채권 포기 — 상당성 자료 존재로 검토 필요 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T008,temporal,Y,12,high,no_consideration;related_counterparty;post_petition,파산신청 이후 행위 — 창은 미래로 열림
+T009,temporal,Y,12,high,post_adjudication_soft,파산선고 이후 — 상한 미확정이므로 배제하지 않고 표시
+T010,economic,Y,12,medium,related_counterparty,대가비율 0.3226 — 지급 확인됨. 3단계 판정 결과
+T011,action,Y,6,high,no_consideration;non_cash_waiver,로열티 채권 포기 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T012,party,Y,12,high,related_counterparty;multi_counterparty,상속재산분할 지분 포기 — 상대방 복수 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T013,action,N,12,,routed_to_manual_review,이혼 재산분할 — 초과부분만 별도 검토
+T014,action,N,,,routed_to_art391_1_2_3,자기 채무 정상 변제 순재산 중립
+T015,economic,N,6,low,,대가비율 0.9583 → 3단계에서 제외. 시간필터가 아닌 경제실질에서 걸러져야 판별력이 있다
+T016,temporal,N,12,,,1년 창 밖
+T017,economic,N,6,,new_loan_offset,collateral_provision 으로 정규화. 대가비율 0.8 — 신규자금 직접 귀속으로 3단계에서 제외
+T018,action,N,,,,일상 지출
+T019,action,N,,,,일상 지출
+T020,action,N,,,,일상 지출
+T021,signal,Y,12,unresolved,funds_circled_back;related_counterparty,value_out 산출 불가 → unresolved. 환류는 거래 간 링크(로드맵 4단계)가 있어야 잡힌다
+T022,action,Y,6,high,no_consideration,시효이익 포기로 소극재산 증가 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
+T101,temporal,Y,6,high,role_split_guarantee;no_consideration;related_principal_debtor,핵심 테스트 — 주채무자만 특수관계이므로 1년 특칙 적용 금지
+T102,temporal,Y,12,high,related_counterparty;no_consideration,법률행위 상대방이 특수관계 법인 — 1년 창 적용
+T103,economic,Y,6,high,,"보증료 12,000,000 수령. 보증채무 액면 300,000,000 대비 비율 0.04 → high. 액면과 기대가치의 구별, 행위유형별 밴드 분리 필요 — README 열린 질문 참조"
+T104,temporal,Y,12,high,no_consideration;related_counterparty,계열사 무상 이전
+T105,temporal,N,12,,,1년 창 밖 (2024-07-11 이전)
+T106,action,N,,,,일상 지출
+T107,temporal,N,6,,related_principal_debtor,주채무자만 특수관계 → 6월창 적용 → 창 밖. 1년 특칙을 오적용하면 검출되므로 오류가 드러난다
+T023,ranking,Y,12,unresolved,no_valuation;related_counterparty;no_consideration,value_out 산출 불가 → 정렬에서 밀어내지 말고 '평가 필요' 섹션으로 분리
+T024,ranking,Y,12,unresolved,no_valuation;related_counterparty;no_consideration,비상장주식 평가액 미산정 — 회수 기대액 0으로 취급하면 안 된다

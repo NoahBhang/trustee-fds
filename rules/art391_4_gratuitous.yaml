@@ -1,0 +1,341 @@
+# =============================================================================
+# 무상부인 검토 규칙 — 채무자회생법 제391조 제4호
+# =============================================================================
+# 이 파일은 "법률 판단"이 아니라 "조사 대상 선별 기준"을 기술한다.
+# 실행기(engine)는 이 파일을 해석만 하며, 판정 로직을 코드에 하드코딩하지 않는다.
+# 법령 개정 시 이 파일만 수정한다.
+#
+# 검토자 확인란: [ ] 법률 전문가 검토 완료 (검토일: ____ / 검토자: ____)
+# =============================================================================
+
+rule_id: art391-4-gratuitous
+version: 0.1.0
+status: draft                    # draft | legal_reviewed | production
+last_updated: 2026-09-02
+
+# 이 룰은 특수관계인 분류 결과를 입력으로 받는다.
+depends_on:
+  - rule_id: related-party-classification
+    file: rules/related_party.yaml
+    provides: [counterparty_relation_verdict, lookback_months, relation_flags]
+
+legal_basis:
+  primary: "채무자회생법 제391조 제4호"
+  text: >
+    채무자가 지급정지 또는 파산신청이 있은 후 또는 그 전 6월 이내에 한
+    무상행위 및 이와 동일시할 수 있는 유상행위
+  related:
+    - ref: "채무자회생법 제392조 제3항"
+      effect: "행위의 법률상 상대방이 특수관계인인 경우 소급기간을 1년으로 연장"
+    - ref: "대법원 2009. 2. 12. 선고 2008다48117"
+      effect: >
+        특수관계인 특칙의 '상대방'은 법률행위의 상대방을 의미한다.
+        주채무자가 특수관계인이라는 사정만으로 1년 특칙을 적용할 수 없다.
+    - ref: "대법원 2014. 5. 29. 선고 2014다765"
+      effect: >
+        무상행위 = 대가 없이 적극재산을 감소시키거나 소극재산을 증가시키는 일체의 행위.
+        '동일시할 수 있는 유상행위' = 반대급부가 지나치게 근소한 경우.
+    - ref: "대법원 2009. 5. 28. 선고 2005다56865"
+      effect: >
+        계열회사·가족회사를 위한 보증·담보제공이라도 채무자에게
+        직접적·현실적 경제적 이익이 없으면 무상성이 부정되지 않는다.
+
+# -----------------------------------------------------------------------------
+# 1단계: 시기적 요건
+# -----------------------------------------------------------------------------
+temporal_filter:
+
+  # 기준 사건. 둘 다 존재할 수 있으며, 각각 창을 만들고 합집합을 취한다.
+  anchor_events:
+    - id: suspension_of_payment
+      field: case.suspension_of_payment_date
+      label: "지급정지일"
+      contested: true            # 사실 인정의 대상 → 시나리오 변수로 취급
+      required: false
+    - id: bankruptcy_petition
+      field: case.petition_date
+      label: "파산신청일"
+      contested: false
+      required: true
+
+  combine: union
+
+  # 소급기간. 당사자 관계는 거래 테이블이 아니라 parties / transaction_parties 에
+  # 있으므로, 분기 값은 related_party.yaml 의 판정 결과를 받아 쓴다.
+  # principal_debtor 나 ultimate_beneficiary 의 관계는 절대 여기에 들어오지 않는다.
+  # (대법원 2009. 2. 12. 선고 2008다48117)
+  lookback:
+    switch_on: related_party.verdict_for(role="legal_counterparty")
+    cases:
+      related:     { months: 12, basis: "채무자회생법 제392조 제3항" }
+      not_related: { months: 6,  basis: "채무자회생법 제391조 제4호" }
+      verify:      { months: 12, basis: "판단 보류 — 누락 방지를 위해 넓은 창 적용",
+                     flag: relation_unverified }
+    multiple_counterparties: any_related_wins
+    calculation: calendar_months # 180일 고정 금지. 일수는 참고로 병기.
+    day_count_note: >
+      기산점 및 초일 산입 여부는 민법 일반 원칙에 따른다.
+      경계일(±3일) 거래는 boundary_case 플래그를 붙여 별도 표시한다.
+
+  # 창의 상한. 조문은 "있은 후"로 열려 있어 문언상 종기가 없다.
+  # 파산선고 후에는 관리처분권이 관재인에게 이전되므로 사실상 선고일이 상한처럼
+  # 작동할 것으로 보이나, 이는 확인이 필요한 열린 질문이다.
+  upper_bound:
+    field: case.adjudication_date
+    label: "파산선고일"
+    status: OPEN_QUESTION
+    behavior: soft               # 상한 초과분도 배제하지 않고 별도 표시만 한다
+    note: "법률 전문가 확인 필요. 확정 전까지 하드 필터로 쓰지 않는다."
+
+# -----------------------------------------------------------------------------
+# 2단계: 행위 유형 필터
+# -----------------------------------------------------------------------------
+action_filter:
+
+  # 무상성이 문제될 수 있는 행위 유형. 직무편람 제4판 및 판례 기준.
+  #
+  # ★ 원칙: action_type 에는 '사실'만 적는다. '결론'을 적지 않는다.
+  #   입력에 이미 답이 적혀 있으면 시스템이 판정한 것이 아니라 사람이 판정한 것을
+  #   되읽는 것이 되고, 테스트는 통과하지만 아무것도 검증하지 못한다.
+  #   예: undervalue_sale(염가매각) → sale(매각). 염가 여부는 3단계에서 판정한다.
+  candidate_types:
+    - gift                          # 증여·유증
+    - debt_forgiveness              # 채무면제
+    - right_waiver                  # 권리포기 (채권·로열티·지식재산권 등)
+    - prescription_benefit_waiver   # 시효이익의 포기
+    - gratuitous_loan_for_use       # 사용대차
+    - third_party_guarantee         # 제3자를 위한 보증
+    - third_party_collateral        # 제3자를 위한 물상보증
+    - sale                          # 매각 — 염가 여부는 3단계 대가비율로 판정
+    - collateral_provision          # 담보 설정 — 교환적 대가 여부는 3단계 판정
+    - litigation_concession         # 청구의 포기·인낙, 재판상 화해, 소취하 등
+    - inheritance_partition_waiver  # 상속재산분할협의상 지분 포기
+
+  # 다른 조문으로 라우팅. 조용히 버리지 않고 사유를 남긴다.
+  route_out:
+    - when: 'action_type == "debt_repayment" and abs(value_out - liability_reduction) / value_out <= 0.02'
+      to: art391-1/2/3
+      reason: "자기 채무의 정상 변제. 순재산 중립 → 무상부인 대상 아님. 편파부인 별도 검토."
+      tolerance: 0.02
+      note: >
+        허용오차를 벗어나는 변제(과다변제)는 route_out 하지 않고 3단계로 보낸다.
+        action_type 이 debt_repayment 라는 사실만으로 배제하지 않는다.
+    - when: action_type == "inheritance_renunciation"
+      to: excluded
+      reason: "상속포기는 인적 결단의 성격. 일반적으로 재산권을 목적으로 한 행위로 보지 않음."
+    - when: action_type == "divorce_property_division"
+      to: manual_review
+      reason: "청산·부양적 기능. 상당성을 벗어난 초과부분만 문제될 수 있음."
+
+# -----------------------------------------------------------------------------
+# 3단계: 경제적 실질 (Value Out ↔ Value In)
+# -----------------------------------------------------------------------------
+# 비교 단위는 항상 '채무자 기준'이다.
+# 상대방이나 제3자가 얻은 이익은 분모·분자 어디에도 들어가지 않는다.
+economic_substance:
+
+  value_out:
+    components:
+      - asset_fair_value            # 출연한 재산의 합리적 가치
+      - liability_increase_value    # 보증·담보로 증가한 채무의 기대가치
+      - waived_right_value          # 포기한 권리의 가치
+    missing_policy: flag_and_continue
+    note: "fair_value 결측이 기본값이다. 결측을 0으로 대체하지 않는다."
+
+  value_in:
+    components:
+      - verified_cash_received      # 실제 입금이 확인된 대가
+      - verified_debt_reduction     # 확인된 채무 감소
+      - realizable_direct_benefit   # 채무자에게 직접 귀속된 실현 가능한 이익
+    excluded_from_value_in:         # 판례상 '직접적·현실적 이익'으로 보기 어려운 것
+      - "그룹 전체의 존속 기대"
+      - "가족회사 유지에 따른 간접 이익"
+      - "구상권의 형식적 존재 (회수가능성 미평가 시)"
+      - "기업 이미지, 우호적 거래관계, 장래 사업기회"
+      - "행위 당시 채무자에게 자력이 충분했다는 사정"
+    note: >
+      계약서상 명목 대가(consideration_contractual)는 value_in 에 들어가지 않는다.
+      금융자료로 지급이 검증된 금액(consideration_paid)만 산입한다.
+
+  ratio:
+    formula: "value_in / value_out"
+    denominator_zero: undefined     # 계산 불가로 표시. 0으로 나누지 않는다.
+    legal_status: NOT_A_LEGAL_TEST
+    warning: >
+      법률과 판례는 무상성 판단에 고정 비율 기준을 두지 않는다.
+      아래 임계값은 조사 우선순위 기준일 뿐이며, 출력문에서 법정 기준으로
+      표현해서는 안 된다.
+    triage_bands:                   # 내부 운영값. 조문 근거 없음.
+      - { when: "ratio is undefined", priority: unresolved }
+      - { max: 0.10, priority: high }
+      - { max: 0.50, priority: medium }
+      - { max: null, priority: low }
+
+  # 매각의 염가 여부는 여기서 판정한다. 입력 action_type 이 아니라 계산 결과다.
+  undervalue_assessment:
+    applies_to: [sale, collateral_provision, right_waiver, inheritance_partition_waiver]
+    basis: >
+      대법원 2014. 5. 29. 선고 2014다765 — '반대급부가 지나치게 근소하여
+      사실상 무상행위와 다름없는 경우'. 법률·판례는 고정 비율 기준을 두지 않는다.
+    outcome:
+      - when: "ratio is undefined"
+        result: unresolved
+        note: "공정가치 미상. 배제하지 않고 '평가 필요' 로 분리 표시한다."
+      - when: "ratio <= 0.50"
+        result: candidate
+        note: "무상행위와 동일시할 수 있는지 검토 대상. 임계값은 조사 기준일 뿐이다."
+      - when: "ratio > 0.50"
+        result: not_candidate
+        note: >
+          정상 대가 범위로 보아 후보에서 제외하되, 제외 사유와 산식을 기록한다.
+          환가비용·시장 유동성·거래 긴급성 등 개별 사정이 있으면 수동 복원 가능.
+    forbidden: >
+      출력문에서 이 임계값을 '법정 기준' 으로 표현하는 것.
+
+# -----------------------------------------------------------------------------
+# 우선순위 신호 (가점이 아니라 '중첩 표시')
+# -----------------------------------------------------------------------------
+# 점수는 부인 성립 확률도, 승소 확률도 아니다. 독립 신호의 중첩 정도일 뿐이다.
+priority_signals:
+  - id: no_consideration
+    when: "value_in == 0"
+    label: "대가 없음"
+  - id: payment_unverified
+    when: "consideration_contractual > 0 and payment_verified == false"
+    label: "계약서상 대가는 있으나 실제 지급 미확인"
+  - id: related_counterparty
+    when: 'related_party.verdict_for(role="legal_counterparty") == "related"'
+    label: "법률행위 상대방이 특수관계인"
+  - id: role_split_guarantee
+    when: 'party_of(role="principal_debtor") not in parties_of(role="legal_counterparty")'
+    label: "제3자 보증 — 주채무자와 상대방 분리"
+  - id: related_principal_debtor
+    when: 'related_party.verdict_for(role="principal_debtor") == "related"'
+    label: "주채무자가 특수관계인 — 조사 신호일 뿐 소급기간을 바꾸지 않음"
+  - id: funds_circled_back
+    when: "downstream_transfer_to_related_party == true"
+    label: "거래 직후 자금이 관계인에게 환류"
+  - id: non_cash_waiver
+    when: "right_waiver_type != null"
+    label: "비현금 권리의 포기"
+  - id: proximity_before
+    when: "0 < days_before_nearest_anchor <= 30"
+    label: "기준일 직전 30일 이내의 행위"
+  - id: post_anchor
+    when: "transaction_date >= nearest_anchor_date"
+    label: "지급정지·파산신청 이후의 행위"
+    note: "절댓값으로 묶으면 전후가 같아진다. 이후 행위는 그 자체로 더 강한 신호다."
+  - id: no_valuation
+    when: "value_out is undefined"
+    label: "출연 가치 미상 — 평가 자료 없음"
+  - id: no_necessity_evidence
+    when: "necessity_evidence == null"
+    label: "상당성을 뒷받침하는 자료 부재"
+
+
+# =============================================================================
+# 정렬 — priority_signals 와 독립된 최상위 블록
+# =============================================================================
+# 감정가 없는 미술품, 비상장주식, 지식재산권처럼 평가액이 부재한 자산일수록
+# 액수가 크고 은닉 목적이 뚜렷할 가능성이 있다.
+# 결측을 0으로 대체해 정렬하면 가장 위험한 항목이 목록 맨 아래로 사라진다.
+ranking:
+  expected_recovery_formula: "value_out - value_in"
+  partitions:
+    - id: unvalued
+      when: "value_out is undefined"
+      label: "회수 기대액 미상 — 평가 필요"
+      placement: above          # 정렬 목록보다 위에 별도 섹션으로 표시
+      sort: ["signal_count desc", "transaction_date desc"]
+      note: "금액으로 줄을 세울 수 없으므로 신호 중첩 수와 최근성으로 정렬한다."
+    - id: valued
+      when: "value_out is defined"
+      label: "회수 기대액 순"
+      placement: below
+      sort: ["expected_recovery desc"]
+  forbidden:
+    - "value_out 결측을 0으로 대체하여 정렬하는 것"
+    - "결측 항목을 목록 하단으로 밀거나 출력에서 생략하는 것"
+    - "unresolved 를 low priority 와 같은 것으로 취급하는 것"
+
+# -----------------------------------------------------------------------------
+# 사람이 반드시 확인해야 하는 항목
+# -----------------------------------------------------------------------------
+# 이 목록은 출력문에 '⚠ 확인 필요'로 그대로 노출된다.
+# 시스템이 확정할 수 없는 것을 확정한 것처럼 보이지 않게 하는 장치.
+requires_human_verification:
+  - id: fair_value_basis
+    text: "출연재산의 공정가치 산정 근거 (감정·시세·거래사례)"
+    trigger: "asset_fair_value == null or fair_value_source == 'estimate'"
+  - id: actual_payment
+    text: "계약서상 대가의 실제 지급 여부 (계좌자료 대조)"
+    trigger: "payment_verified == false"
+  - id: direct_benefit
+    text: "채무자에게 귀속된 직접적·현실적 이익의 존부와 금액"
+    trigger: "guarantee_or_collateral == true"
+  - id: suspension_date
+    text: "지급정지일의 특정 근거 (미특정이면 특정 가능성)"
+    trigger: always
+    note: >
+      지급정지일이 null 인 사건이 오히려 위험하다. 창의 시작점이 파산신청일
+      하나로 좁아져 후보가 대량 누락된다. 있을 때만 확인하는 트리거는 반대다.
+  - id: proportionality
+    text: "행위의 사회경제적 필요성·상당성 (증명책임: 수익자)"
+    trigger: "always"
+  - id: harmfulness
+    text: "일반재산의 절대적 감소 또는 채권자 평등 저해 여부(유해성)"
+    trigger: "always"
+
+# -----------------------------------------------------------------------------
+# 출력 문안
+# -----------------------------------------------------------------------------
+output:
+  forbidden_phrasings:
+    - "이 거래는 제391조 제4호에 따라 부인된다"
+    - "부인 가능성 87%"
+    - "승소 확률"
+  required_elements:
+    - "'회수 기대액 미상' 섹션을 정렬 목록보다 먼저 출력"
+    - 확인된 사실과 미확인 사실의 구별
+    - 적용 조문 및 판례 근거
+    - 수치의 산식과 출처
+    - 확인 필요 항목 목록
+
+  template: |
+    [무상부인 검토 신호 — 우선순위: {priority}]
+
+    {anchor_label}({anchor_date}) 기준 {days}일 {direction}에 이루어진 {action_type_ko}입니다.
+    상대방: {counterparty}{related_suffix}
+
+    · 출연 가치(Value Out): {value_out} ({value_out_basis})
+    · 확인된 대가(Value In): {value_in} ({value_in_basis})
+    · 대가비율: {ratio} — 조사 우선순위 지표이며 법정 기준이 아닙니다.
+    · 회수 기대액(참고): {expected_recovery}
+
+    적용 검토 조문: 채무자회생법 제391조 제4호{related_clause}
+    소급기간 {lookback_months}개월 적용 근거: {lookback_basis}
+
+    관측된 신호: {signals}
+
+    ⚠ 확인 필요
+    {verification_items}
+
+    본 출력은 조사 대상 선별 결과이며, 부인권 성립 여부에 관한 법률적 판단이
+    아닙니다. 최종 판단은 파산관재인에게 있습니다.
+
+  unvalued_template: |
+    [회수 기대액 미상 — 평가 필요]
+
+    {anchor_label}({anchor_date}) 기준 {days}일 {direction}에 이루어진 {action_type_ko}입니다.
+    상대방: {counterparty}{related_suffix}
+
+    · 출연 가치(Value Out): 산출 불가 — {missing_reason}
+    · 확인된 대가(Value In): {value_in}
+    · 대가비율: 산출 불가
+
+    이 항목은 금액이 작아서가 아니라 평가 자료가 없어 정렬에서 제외되었습니다.
+    회수 기대액을 0으로 보아서는 안 됩니다.
+
+    ⚠ 우선 확인
+    · 출연재산의 가액 평가 (감정 · 시세 · 거래사례 중 가능한 방법)
+    {verification_items}

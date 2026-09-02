@@ -1,0 +1,31 @@
+trustee-fds
+Copyright 2026 방경일 (Kyungil Bhang)
+
+This product includes software developed by 방경일 (Kyungil Bhang).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+------------------------------------------------------------------------
+법률 자료에 관한 고지 (Notice regarding legal materials)
+------------------------------------------------------------------------
+
+이 저장소에 포함된 법령 조문, 판례 요지 및 법리 분석은 연구 및 포트폴리오
+목적의 자료이며, 법률의견서가 아니다.
+
+- 「채무자 회생 및 파산에 관한 법률」 조문은 국가법령정보센터 공개 자료에 따른다.
+- 대법원 판례의 요지는 공개된 판결문에 기초한 저자의 정리이며, 판결문 원문
+  그 자체가 아니다.
+- 서울회생법원 「개인파산관재인 직무편람」의 내용은 인용 및 참조에 그친다.
+
+특히 rules/related_party.yaml 의 특수관계인 분류는 관련 시행령 원문과 대조되지
+않은 초안(status: draft)이다. 실제 사건에 사용해서는 안 된다.
+
+개별 사건의 부인권 행사 여부는 사건 기록, 증거, 최신 법령·판례 및 담당
+파산관재인의 법률적 판단에 따라 결정되어야 한다.
+
+data/sample 의 모든 데이터는 규칙 검증을 위해 합성된 가상 자료이며, 실재하는
+개인·법인의 정보를 포함하지 않는다.

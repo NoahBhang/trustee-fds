@@ -1,0 +1,90 @@
+# =============================================================================
+# 특수관계인 분류 규칙
+# =============================================================================
+# parties.csv 는 '관계라는 사실'만 기록한다.
+# 그 사실이 법령상 특수관계인에 해당하는지는 이 파일이 판단한다.
+#
+# ★ 이 파일은 반드시 법률 전문가의 검토를 받아야 한다.
+#   특수관계인의 범위는 채무자회생법 제392조 제3항 및 그 위임을 받은
+#   대통령령에 정해져 있으며, 아래 분류는 초안이다.
+#   시행령의 정확한 문언·호별 범위를 대조하기 전에는 production 으로 올리지 않는다.
+#
+# 검토자 확인란: [ ] 시행령 원문 대조 완료 (검토일: ____ / 검토자: ____)
+# =============================================================================
+
+rule_id: related-party-classification
+version: 0.1.0
+status: draft
+legal_basis:
+  - "채무자회생법 제392조 제3항"
+  - "동법 시행령 (특수관계인의 범위) — 원문 대조 필요"
+  - "대법원 2009. 2. 12. 선고 2008다48117 — '상대방'은 법률행위의 상대방"
+
+# -----------------------------------------------------------------------------
+# 관계 유형 → 특수관계인 해당 여부
+# -----------------------------------------------------------------------------
+# verdict:
+#   related      특수관계인으로 취급 → 소급기간 12월
+#   not_related  일반 상대방 → 소급기간 6월
+#   verify       판단 보류 → 넓은 창(12월) 적용 + 검토 플래그
+classification:
+  self:                { verdict: not_related, note: "채무자 본인. 상대방이 아님" }
+  spouse:              { verdict: related }
+  lineal_ascendant:    { verdict: related }
+  lineal_descendant:   { verdict: related }
+  sibling:             { verdict: related }
+  affinity:            { verdict: verify,  note: "인척. 시행령상 촌수 범위 확인 필요" }
+  collateral_relative: { verdict: verify,  note: "방계혈족. 촌수 확인 필요" }
+  former_spouse:       { verdict: verify,  note: "행위 시점에 혼인관계가 존속했는지에 따라 달라짐" }
+  affiliate:           { verdict: verify,  note: "지분율·지배관계 요건 확인 필요" }
+  officer:             { verdict: verify,  note: "임원의 범위 확인 필요" }
+  employee:            { verdict: verify }
+  none:                { verdict: not_related }
+
+unknown_relation_type: verify
+verify_behavior:
+  lookback: widest        # 판단 보류 시 넓은 창으로 잡아 누락을 막는다
+  flag: relation_unverified
+
+# -----------------------------------------------------------------------------
+# 시점 의존성
+# -----------------------------------------------------------------------------
+# 관계는 변한다. 이혼, 퇴임, 지분 매각, 입양.
+# 판단 기준일은 '행위 당시'이지 '파산선고 당시'가 아니다.
+temporal_scope:
+  evaluate_at: transaction.transaction_date
+  validity_fields:
+    from: party.relation_valid_from
+    to:   party.relation_valid_to
+  rules:
+    - if: "relation_valid_from is null and relation_valid_to is null"
+      then: "기간 정보 없음 → 상시 유효로 간주하되 relation_period_unknown 플래그"
+    - if: "transaction_date < relation_valid_from"
+      then: not_related
+    - if: "relation_valid_to is not null and transaction_date > relation_valid_to"
+      then: not_related
+  note: >
+    관계 종료일 전후 30일 이내의 거래는 relation_boundary 플래그를 붙인다.
+    이혼 재산분할처럼 관계 종료 자체가 거래의 원인인 경우가 있기 때문이다.
+
+# -----------------------------------------------------------------------------
+# 역할별 적용 (가장 중요)
+# -----------------------------------------------------------------------------
+# 소급기간 분기는 오직 legal_counterparty 의 관계만 본다.
+# principal_debtor 나 ultimate_beneficiary 의 관계는 조사 신호일 뿐,
+# 절대 소급기간을 바꾸지 않는다. (2008다48117)
+role_application:
+  determines_lookback:
+    - legal_counterparty
+  signal_only:
+    - principal_debtor
+    - ultimate_beneficiary
+  forbidden: >
+    principal_debtor 또는 ultimate_beneficiary 의 특수관계 여부를 근거로
+    12월 소급기간을 적용하는 것. 대법원 2008다48117 위반.
+
+# 상대방이 복수인 경우
+multiple_counterparties:
+  lookback_resolution: any_related_wins   # 한 명이라도 특수관계인이면 12월
+  value_allocation: by_share_ratio        # 출연 가치는 지분 비율로 배분
+  note: "지분 비율의 합이 1.0이 아니면 share_sum_mismatch 플래그"

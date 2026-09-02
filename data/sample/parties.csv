@@ -1,0 +1,23 @@
+party_id,case_id,display_name,party_type,relation_type,relation_valid_from,relation_valid_to,relation_basis,relation_source,note
+P-001,CASE-001,배우자,individual,spouse,2011-04-02,,혼인관계증명서,가족관계등록부,
+P-002,CASE-001,자녀,individual,lineal_descendant,2013-09-18,,가족관계증명서,가족관계등록부,
+P-003,CASE-001,형제 1,individual,sibling,,,가족관계증명서,가족관계등록부,
+P-004,CASE-001,형제 2,individual,sibling,,,가족관계증명서,가족관계등록부,
+P-005,CASE-001,처남,individual,affinity,2011-04-02,,혼인관계증명서,가족관계등록부,인척 — 시행령상 범위 확인 필요
+P-006,CASE-001,조카,individual,collateral_relative,,,가족관계증명서,가족관계등록부,
+P-007,CASE-001,전 배우자,individual,former_spouse,2011-04-02,2025-03-08,협의이혼 확인,가족관계등록부,★ P-001과 동일인 여부 미확정. 동일인이면 T001·T003의 소급기간이 6월로 바뀐다
+P-010,CASE-001,지인,individual,none,,,,진술,
+P-011,CASE-001,제3자 매수인,individual,none,,,,매매계약서,
+C-002,CASE-001,거래처 A,corporation,none,,,,사업자등록,
+C-003,CASE-001,거래처 B,corporation,none,,,,계약서,
+C-004,CASE-001,채권자 C,individual,none,,,,각서,
+C-BANK,CASE-001,주거래은행,corporation,none,,,,대출약정서,
+C-TELCO,CASE-001,통신사,corporation,none,,,,,
+C-LANDLORD,CASE-001,임대인,individual,none,,,,임대차계약서,
+C-TAX,CASE-001,과세관청,government,none,,,,,
+D-002,CASE-002,채무자 법인,corporation,self,,,,법인등기부,
+CORP-AFF,CASE-002,계열회사,corporation,affiliate,2019-06-01,,지분 62% 보유,법인등기부·주주명부,
+CORP-OTHER,CASE-002,비계열 거래처,corporation,none,,,,법인등기부,
+C-BANK2,CASE-002,은행 2,corporation,none,,,,보증계약서,
+C-BANK3,CASE-002,은행 3,corporation,none,,,,보증계약서,
+C-PAYROLL,CASE-002,임직원(집계),group,none,,,,급여대장,개별 당사자 아님 — 집계 행

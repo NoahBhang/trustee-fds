@@ -1,0 +1,3 @@
+case_id,debtor_id,debtor_type,petition_date,suspension_of_payment_date,suspension_date_basis,suspension_date_confirmed,adjudication_date,note
+CASE-001,D-001,individual,2025-11-14,2025-08-20,"거래은행 3곳 연체 개시일",N,2026-02-10,"개인사업자 폐업 후 파산신청"
+CASE-002,D-002,corporation,2025-10-02,2025-07-11,"어음 부도 발생일",Y,2026-01-20,"계열사 보증 사안 포함"

@@ -1,0 +1,32 @@
+transaction_id,case_id,transaction_date,action_type,asset_fair_value,fair_value_source,liability_increase_value,waived_right_value,consideration_contractual,consideration_paid,payment_verified,debtor_direct_benefit_value,benefit_realizability,necessity_evidence,contrary_evidence,source,note
+T001,CASE-001,2025-09-12,sale,480000000,estimate,,,30000000,0,N,0,,,,등기부등본,아파트 소유권 이전 계약서상 3천만원
+T002,CASE-001,2025-06-30,gift,50000000,verified,,,0,0,N,0,,,,계좌내역,자녀 계좌로 현금 이체
+T003,CASE-001,2024-08-22,gift,80000000,verified,,,0,0,N,0,,,,계좌내역,1년 창 경계 안쪽 2일
+T004,CASE-001,2024-08-18,gift,20000000,verified,,,0,0,N,0,,,,계좌내역,1년 창 경계 바깥 2일
+T005,CASE-001,2025-02-25,gift,18000000,market,,,0,0,N,0,,,,자동차등록원부,승용차 무상 이전
+T006,CASE-001,2025-02-18,gift,5000000,estimate,,,0,0,N,0,,,,진술,6월 창 경계 바깥 2일
+T007,CASE-001,2025-10-05,debt_forgiveness,,,,35000000,0,0,N,0,,,거래처 회생절차 개시 통지,장부,매출채권 포기 각서
+T008,CASE-001,2025-12-05,gift,12000000,verified,,,0,0,N,0,,,,계좌내역,파산신청 이후 행위
+T009,CASE-001,2026-03-01,gift,8000000,verified,,,0,0,N,0,,,,계좌내역,파산선고 이후 행위
+T010,CASE-001,2025-07-15,sale,620000000,appraisal,,,200000000,200000000,Y,200000000,realized,,매매계약서 및 입금 확인,등기부등본,상가 이전 대금 일부 지급
+T011,CASE-001,2025-04-10,right_waiver,,,,45000000,0,0,N,0,,,,계약서,로열티 채권 포기
+T012,CASE-001,2025-05-20,inheritance_partition_waiver,150000000,estimate,,,0,0,N,0,,,,상속재산분할협의서,상대방 복수
+T013,CASE-001,2025-03-08,divorce_property_division,300000000,estimate,,,0,0,N,0,,,협의이혼 확인서,판결문,재산분할 상당성 검토 필요
+T014,CASE-001,2025-09-01,debt_repayment,100000000,verified,,,100000000,100000000,Y,,,,대출잔액 감소 확인,계좌내역,자기 채무 정상 변제
+T015,CASE-001,2025-04-15,sale,12000000,market,,,11500000,11500000,Y,11500000,realized,,시세 대비 96%,계좌내역,중고차 정상 매각
+T016,CASE-001,2024-05-10,gift,30000000,verified,,,0,0,N,0,,,,계좌내역,1년 창 밖
+T017,CASE-001,2025-08-01,collateral_provision,,,250000000,,,,Y,200000000,realized,신규 운전자금 필요,대출약정서,계좌내역,"자기 채무를 위한 담보 설정 250,000,000. 신규 운전자금 200,000,000 직접 수령"
+T018,CASE-001,2025-06-05,ordinary_expense,,,,,89000,89000,Y,,,,,계좌내역,통신비
+T019,CASE-001,2025-06-25,ordinary_expense,,,,,1200000,1200000,Y,,,,,계좌내역,월세
+T020,CASE-001,2025-07-10,ordinary_expense,,,,,3400000,3400000,Y,,,,,납부확인서,부가가치세
+T021,CASE-001,2025-09-13,gift,,,,,0,0,N,0,,,,계좌내역,T001 직후 조카 계좌 경유 자금 환류 의심
+T022,CASE-001,2025-08-15,prescription_benefit_waiver,,,,22000000,0,0,N,0,,,,각서,시효 완성 채무 승인
+T101,CASE-002,2025-05-14,third_party_guarantee,,,500000000,,0,0,N,0,,,,보증계약서,계열사 대출 연대보증 보증료 없음
+T102,CASE-002,2025-06-20,third_party_collateral,380000000,appraisal,,,0,0,N,0,,,,근저당설정등기,특수관계 법인에 직접 담보 제공
+T103,CASE-002,2025-08-30,third_party_guarantee,,,300000000,,12000000,12000000,Y,12000000,realized,보증료 수령,보증료 입금 확인,보증계약서,보증료 실제 수령 사안
+T104,CASE-002,2025-09-18,gift,90000000,verified,,,0,0,N,0,,,,계좌내역,계열사 무상 자금 이전
+T105,CASE-002,2024-06-20,gift,60000000,verified,,,0,0,N,0,,,,계좌내역,1년 창 밖
+T106,CASE-002,2025-07-25,ordinary_expense,,,,,48000000,48000000,Y,,,,,급여대장,직원 급여
+T107,CASE-002,2024-11-05,third_party_guarantee,,,250000000,,0,0,N,0,,,,보증계약서,T101과 동일 구조. 12월창 안 / 6월창 밖 — 1년 특칙 오적용 여부를 판별하는 대조군
+T023,CASE-001,2025-09-20,gift,,,,,0,0,N,0,,,,세관 반출입 기록,회화 3점 무상 이전. 감정가 없음 — value_out 산출 불가
+T024,CASE-002,2025-08-12,gift,,,,,0,0,N,0,,,,주주명부,비상장 자회사 지분 18% 무상 이전. 평가액 미산정
