@@ -5,7 +5,7 @@ import csv
 import sys
 from pathlib import Path
 
-from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run
+from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,6 +19,64 @@ if hasattr(sys.stdout, "reconfigure"):        # Python 3.7+
 
 def won(v):
     return "산출 불가" if v is None else f"{v:,.0f}원"
+
+
+# ------------------------------------------------------------------ 무결성 검사 리포트
+
+def report_integrity(ds):
+    """데이터 무결성 검사 결과를 출력한다."""
+    if not ds.integrity_issues:
+        return
+    
+    print("=" * 74)
+    print("⚠ 데이터 무결성 검사")
+    print("=" * 74)
+    
+    # 심각도별로 분류
+    by_severity = {}
+    for issue in ds.integrity_issues:
+        if issue.severity not in by_severity:
+            by_severity[issue.severity] = []
+        by_severity[issue.severity].append(issue)
+    
+    # CRITICAL부터 출력
+    severity_order = [IssueSeverity.CRITICAL, IssueSeverity.WARNING, IssueSeverity.INFO]
+    for severity in severity_order:
+        if severity not in by_severity:
+            continue
+        
+        issues = by_severity[severity]
+        if severity == IssueSeverity.CRITICAL:
+            print(f"\n【심각 — 조용히 판정 오류】  {len(issues)}건")
+        elif severity == IssueSeverity.WARNING:
+            print(f"\n【경고 — 데이터 소실】  {len(issues)}건")
+        else:
+            print(f"\n【정보 — 진단 개선】  {len(issues)}건")
+        
+        # 카테고리별로 다시 분류
+        by_category = {}
+        for issue in issues:
+            if issue.category not in by_category:
+                by_category[issue.category] = []
+            by_category[issue.category].append(issue)
+        
+        for category in [IssueCategory.REFERENTIAL, IssueCategory.VALUE_CONSTRAINT]:
+            if category not in by_category:
+                continue
+            
+            print(f"  [{category.value}]")
+            for issue in by_category[category]:
+                print(f"    • {issue.message}")
+                for detail in issue.details[:3]:  # 처음 3개만 표시
+                    if isinstance(detail, dict):
+                        detail_str = ", ".join(f"{k}={v}" for k, v in detail.items())
+                        print(f"      - {detail_str}")
+                    else:
+                        print(f"      - {detail}")
+                if len(issue.details) > 3:
+                    print(f"      ... 외 {len(issue.details) - 3}건")
+        
+        print()
 
 
 # ------------------------------------------------------------------ 리포트
@@ -112,8 +170,15 @@ def validate(results):
 def main():
     ds = Dataset.load(ROOT)
     rules = load_rules(ROOT)
+    
+    # 무결성 검사 결과 출력 (리포트 앞에)
+    report_integrity(ds)
+    
+    # 본 리포트
     results = run(ds, rules)
     report(ds, rules, results)
+    
+    # 기대값 대조
     m, u = validate(results)
     return 1 if m else 0
 

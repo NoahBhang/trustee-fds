@@ -1,4 +1,5 @@
 party_id,case_id,display_name,party_type,relation_type,relation_valid_from,relation_valid_to,relation_basis,relation_source,note
+D-001,CASE-001,채무자 본인,individual,self,,,,거래기록,규약 준용: 모든 사건은 채무자 본인을 self로 등재
 P-001,CASE-001,배우자,individual,spouse,2011-04-02,,혼인관계증명서,가족관계등록부,
 P-002,CASE-001,자녀,individual,lineal_descendant,2013-09-18,,가족관계증명서,가족관계등록부,
 P-003,CASE-001,형제 1,individual,sibling,,,가족관계증명서,가족관계등록부,
