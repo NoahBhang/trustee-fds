@@ -725,10 +725,69 @@ def undervalue_verdict(tx, ratio, rule):
     return "candidate" if ratio <= 0.50 else "not_candidate"
 
 
+def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
+                           depth, visited):
+    """
+    tx_id 로 자금이 흘러들어온 경로를 max_hops 까지 역방향으로 추적한다.
+
+    약한 고리 원칙: 각 홉마다 min_confidence 와 proximity_window_days 를 독립
+    적용한다. confidence 미달인 홉에서는 그 경로 추적을 중단하고(신호로 세우지
+    않음), 시간창을 넘는 홉이 하나라도 있으면 그 경로 전체를 지연으로 표시한다.
+
+    반환: (in_window_hits: list[int], delayed_hits: list[int])
+          각 리스트는 신호가 성립한 홉 수(1=직접 연결, 2 이상=다단계)를 담는다.
+    """
+    min_rank = confidence_rank[ffa["min_confidence"]]
+    window = ffa["proximity_window_days"]
+    max_hops = ffa.get("max_hops", 1)
+
+    in_window, delayed = [], []
+    if depth > max_hops:
+        return in_window, delayed
+
+    for link in ds.inbound_fund_flows(case_id, tx_id):
+        if confidence_rank.get(link["confidence"], -1) < min_rank:
+            continue  # 약한 고리 — 이 경로는 여기서 끊는다
+
+        from_id = link["from_transaction_id"]
+        if from_id in visited:
+            continue  # cycle_policy: skip_visited
+
+        from_tx = next((t for t in ds.transactions
+                         if t["transaction_id"] == from_id), None)
+        if from_tx is None:
+            continue  # 무결성 검사가 별도로 잡는다
+
+        fd = _date(from_tx["transaction_date"])
+        if fd is None or tx_date is None:
+            continue
+
+        within = (tx_date - fd).days <= window
+        if within:
+            in_window.append(depth)
+        else:
+            delayed.append(depth)
+
+        # 이 홉의 출발 거래에서 다시 거슬러 올라간다
+        sub_in, sub_delayed = _trace_inbound_chains(
+            ds, case_id, from_id, fd, ffa, confidence_rank,
+            depth + 1, visited | {from_id})
+        # 상류 홉이 시간창을 넘었으면 경로 전체가 지연이다 (약한 고리)
+        if within:
+            in_window += sub_in
+        else:
+            delayed += sub_in
+        delayed += sub_delayed
+
+    return in_window, delayed
+
+
 def evaluate_funds_circled_back(ds, case_id, tx, rule):
     """
-    이 거래로 자금이 흘러들어온(inbound funds_flow) 링크가 있는지, 그리고
+    이 거래로 자금이 흘러들어온(inbound funds_flow) 경로가 있는지, 그리고
     그것이 신호로 인정되는지 판정한다. 링크는 사실, 이 함수는 판단.
+
+    max_hops 까지 다단계 연쇄(layering)를 추적한다 — 은닉은 한 번에 끝나지 않는다.
 
     반환: (circled_back: bool, flags: list[str])
     """
@@ -736,35 +795,21 @@ def evaluate_funds_circled_back(ds, case_id, tx, rule):
     if not ffa:
         return False, []
 
-    min_confidence = ffa["min_confidence"]
     confidence_rank = {"alleged": 0, "probable": 1, "verified": 2}
-    min_rank = confidence_rank[min_confidence]
-    window = ffa["proximity_window_days"]
+    tx_id = tx["transaction_id"]
     td = _date(tx["transaction_date"])
 
-    circled_back = False
+    in_window, delayed = _trace_inbound_chains(
+        ds, case_id, tx_id, td, ffa, confidence_rank, depth=1, visited={tx_id})
+
     flags = []
+    if delayed:
+        flags.append(ffa["outside_window_flag"])  # 배제하지 않고 표시만 (soft)
+    # 2홉 이상으로 잡힌 경우 직접 연결과 증거 강도가 다르므로 구별해 표시한다
+    if any(hops >= 2 for hops in in_window) and "multi_hop_flag" in ffa:
+        flags.append(ffa["multi_hop_flag"])
 
-    for link in ds.inbound_fund_flows(case_id, tx["transaction_id"]):
-        if confidence_rank.get(link["confidence"], -1) < min_rank:
-            continue  # alleged 등 최소 신뢰도 미달 — 신호로 세우지 않는다
-
-        from_tx = next((t for t in ds.transactions
-                         if t["transaction_id"] == link["from_transaction_id"]), None)
-        if from_tx is None:
-            continue  # 무결성 검사가 별도로 잡는다
-
-        fd = _date(from_tx["transaction_date"])
-        if fd is None or td is None:
-            continue
-
-        gap_days = (td - fd).days
-        if gap_days <= window:
-            circled_back = True
-        else:
-            flags.append(ffa["outside_window_flag"])  # 배제하지 않고 표시만 (soft)
-
-    return circled_back, flags
+    return bool(in_window), flags
 
 
 # ------------------------------------------------------------ 신호 술어

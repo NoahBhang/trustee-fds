@@ -1,2 +1,3 @@
 link_id,case_id,from_transaction_id,to_transaction_id,link_type,evidence,confidence,note
 L001,CASE-001,T001,T021,funds_flow,계좌내역,probable,매각대금이 조카 계좌를 경유해 1일 만에 환류된 정황
+L002,CASE-001,T021,T025,funds_flow,계좌내역,probable,조카 계좌에서 배우자 계좌로 5일 만에 재이전
