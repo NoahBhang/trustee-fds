@@ -117,9 +117,14 @@ action_filter:
       to: art391-1/2/3
       reason: "자기 채무의 정상 변제. 순재산 중립 → 무상부인 대상 아님. 편파부인 별도 검토."
       tolerance: 0.02
+      basis: "대법원 2006. 11. 27. 선고 2006다50444 — 구상권도 언제나 대가가 아니다; 상당성 법리"
       note: >
         허용오차를 벗어나는 변제(과다변제)는 route_out 하지 않고 3단계로 보낸다.
         action_type 이 debt_repayment 라는 사실만으로 배제하지 않는다.
+        [구현 검증됨] 이 조건은 engine.py 의 _debt_repayment_within_tolerance() 가
+        consideration_paid(실지급액) 와 liability_reduction(실제 채무 감소액)을
+        비교해 실행한다 — 과거에는 action_type 문자열만 매칭해 항상 라우팅됐다
+        (T027 로 재현·수정, 34건 중 이 케이스만 target_stage=action).
     - when: action_type == "inheritance_renunciation"
       to: excluded
       reason: "상속포기는 인적 결단의 성격. 일반적으로 재산권을 목적으로 한 행위로 보지 않음."

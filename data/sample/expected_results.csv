@@ -31,3 +31,5 @@ T107,temporal,N,6,,related_principal_debtor,주채무자만 특수관계 → 6�
 T023,ranking,Y,12,unresolved,no_valuation;related_counterparty;no_consideration,value_out 산출 불가 → 정렬에서 밀어내지 말고 '평가 필요' 섹션으로 분리
 T024,ranking,Y,12,unresolved,no_valuation;related_counterparty;no_consideration,비상장주식 평가액 미산정 — 회수 기대액 0으로 취급하면 안 된다
 T025,signal,Y,12,high,funds_circled_back;related_counterparty,"로드맵 4-b 대조군 — T001→T021→T025 2홉 체인. 각 홉만 보면 평범하나 이으면 환류다. funds_circled_back_multihop 플래그로 1홉과 구별 표시"
+T027,action,N,,,,"대법원 2006다50444·2014다765 원리 — 과다변제는 순재산 중립이 아니다. 대출잔액 100,000,000 대비 130,000,000 지급 → 허용오차(2퍼센트) 초과, route_out 안 됨. debt_repayment 가 candidate_types 밖이라 여기서 배제되나, 라우팅 사유는 아니다(§8 열린 질문: 초과분의 경제적 실질 계산은 미구현)"
+T028,action,N,,,,route_out 경계 사례 — inheritance_renunciation 은 인적 결단의 성격으로 일반적 부인 대상과 구별한다. 지금까지 샘플에 이 유형이 없어 route_out 규칙이 실제로 한 번도 실행된 적이 없었다

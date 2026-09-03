@@ -642,6 +642,25 @@ def temporal_window(case_row, months, rule):
     return start, anchors, upper
 
 
+def _debt_repayment_within_tolerance(tx, route_rule):
+    """
+    자기 채무 변제가 허용오차 이내인지 확인한다. '실제로 지급한 금액'
+    (consideration_paid)과 '실제로 채무가 줄어든 금액'(liability_reduction)을
+    비교한다. 허용오차를 벗어나면(과다변제) route_out 하지 않는다 —
+    route_out 은 '확실히 무상이 아닌' 거래만 배제해야 하기 때문이다.
+
+    비교할 데이터가 없으면 정상 변제로 단정하지 않는다(False 반환 — 3단계로
+    보내 결측을 드러낸다. route_out 은 조용히 배제하는 통로이므로, 근거 없이
+    통과시키지 않는다).
+    """
+    paid = _num(tx.get("consideration_paid"))
+    reduced = _num(tx.get("liability_reduction"))
+    if paid is None or reduced is None or paid == 0:
+        return False
+    tolerance = route_rule.get("tolerance", 0.02)
+    return abs(paid - reduced) / paid <= tolerance
+
+
 # ------------------------------------------------------- 3단계: 경제 실질
 
 def economics(tx, rule):
@@ -946,7 +965,21 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         # --- 2단계: 행위 유형
         res.reached = "action"
         at = tx["action_type"]
-        routed = next((r for r in af["route_out"] if f'"{at}"' in str(r["when"])), None)
+        # route_out 은 문자열 매칭이 아니라 조건을 실제로 평가한다.
+        # debt_repayment 는 숫자 조건(허용오차)이 있어 별도 함수로 판정하고,
+        # 그 외(action_type 만으로 결정되는 규칙)는 문자열 매칭으로 충분하다.
+        routed = None
+        for r in af["route_out"]:
+            if f'"{at}"' not in str(r["when"]):
+                continue
+            if at == "debt_repayment":
+                if _debt_repayment_within_tolerance(tx, r):
+                    routed = r
+                # 허용오차를 벗어나면(과다변제) routed 를 세우지 않는다 —
+                # route_out 하지 않고 아래로 흘려보내 후보 행위 유형 검사를 받는다.
+            else:
+                routed = r
+            break
         if routed:
             res.drop_reason = f"{routed['to']} 로 라우팅"
             results.append(res)
