@@ -479,7 +479,15 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
 
 ## 10. 실행
 
-**Python 3.9 이상** 이 필요하다. 외부 의존성은 없다(표준 라이브러리만 사용).
+**Python 3.9 이상** 이 필요하다(`from __future__ import annotations` 로 `X | None`
+타입 표기를 쓰므로 그 이하에서는 동작하지 않는다).
+
+의존성은 두 개다 — `PyYAML`(룰 파일 파싱), `python-dateutil`(달력 기준 개월 계산).
+`requirements.txt` 에 있다.
+
+```bash
+pip install -r requirements.txt
+```
 
 ### macOS · Linux
 
