@@ -173,6 +173,7 @@ class Dataset:
         issues += self._check_transaction_id_references()
         issues += self._check_duplicate_keys()
         issues += self._check_case_id_coverage()
+        issues += self._check_unreferenced_parties()
         issues += self._check_share_ratio_sum()
         issues += self._check_tx_link_references()
         issues += self._check_tx_link_temporal_order()
@@ -418,6 +419,37 @@ class Dataset:
             ))
         
         return issues
+
+    def _check_unreferenced_parties(self) -> list[IntegrityIssue]:
+        """
+        3군 : parties.csv 에 있으나 어떤 거래에서도(어떤 역할로도) 참조되지 않고,
+        다른 party 의 officer_of 도 가리키지 않는 당사자.
+
+        판정을 깨뜨리지는 않지만, 검증되지 않는 픽스처가 데이터에 쌓이는 것을
+        드러낸다 (officer 픽스처 OFF-* 가 이 방식으로 방치됐던 이력이 있다).
+        relation_type == self 는 규약상 상시 등재이므로 제외한다.
+        """
+        referenced = {l["party_id"] for l in self.links}
+        referenced |= {(r.get("officer_of") or "").strip()
+                       for r in self.parties.values()} - {""}
+
+        orphans = []
+        for (case_id, party_id), row in self.parties.items():
+            if party_id in referenced:
+                continue
+            if (row.get("relation_type") or "").strip() == "self":
+                continue
+            orphans.append({"case_id": case_id, "party_id": party_id,
+                            "relation_type": row.get("relation_type")})
+
+        if orphans:
+            return [IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.INFO,
+                message="어떤 거래에서도 참조되지 않는 당사자 (self 제외)",
+                details=orphans,
+            )]
+        return []
 
     def _check_share_ratio_sum(self) -> list[IntegrityIssue]:
         """

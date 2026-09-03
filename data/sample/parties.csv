@@ -22,6 +22,3 @@ CORP-OTHER,CASE-002,비계열 거래처,corporation,none,,,,법인등기부,,,,
 C-BANK2,CASE-002,은행 2,corporation,none,,,,보증계약서,,,,
 C-BANK3,CASE-002,은행 3,corporation,none,,,,보증계약서,,,,
 C-PAYROLL,CASE-002,임직원(집계),group,none,,,,급여대장,,,,개별 당사자 아님 — 집계 행
-OFF-AFF,CASE-002,계열회사 임원,individual,officer,,,이사회 명부,법인등기부,,CORP-AFF,,계열회사(CORP-AFF, 지분 62%) 임원 — related 예상
-OFF-SELF,CASE-002,채무자법인 임원,individual,officer,,,이사회 명부,법인등기부,,D-002,,채무자 법인 자신의 임원(제2항 가목) — related 예상
-OFF-OTHER,CASE-002,비계열 거래처 임원,individual,officer,,,이사회 명부,법인등기부,,CORP-OTHER,,비계열 거래처(관계없음) 임원 — not_related 예상

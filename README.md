@@ -368,7 +368,8 @@ T015·T014·T028·T017이 그 경계다.
 검사 목록(`Dataset._check_*`): `party_id` 참조 · `legal_counterparty` 커버리지
 (`action_filter.unilateral_acts` 는 제외) · 교차 사건 검증 · 고아 거래 링크 ·
 중복 키(`cases`/`parties`/`transaction_parties`) · `case_id` 커버리지 ·
-`share_ratio` 합 · `transaction_links` 참조·시간순·자기참조.
+참조되지 않는 당사자(`self` 제외, INFO) · `share_ratio` 합 · `transaction_links`
+참조·시간순·자기참조.
 
 발견된 문제는 예외를 던지지 않고 리포트 상단에 별도 섹션으로 표시한다.
 불완전한 실제 사건 데이터를 이유로 리포트 전체를 막으면 도구로서 쓸모가
