@@ -510,6 +510,31 @@ py -3 src/cli.py
 리포트 출력 후 `data/sample/expected_results.csv` 와 대조한다. 불일치가 있으면
 종료 코드 1을 반환한다.
 
+### 테스트
+
+두 층이다.
+
+```bash
+python3 src/cli.py; echo $?          # 통합: 골든파일 대조. 불일치 있으면 1
+                                     #       (파이프로 tail 하면 '불일치 N건' 줄이 안 보인다)
+
+pip install -r requirements-dev.txt
+pytest                               # 단위: engine.py 함수별. CSV 를 읽지 않는다
+```
+
+단위 테스트(`tests/test_engine.py`)는 재귀 함수(`_trace_inbound_chains`)·동적
+분류기·`triage_priority` 를 최소 딕셔너리 픽스처로 검증한다 — 샘플 데이터가 바뀌어도
+안 깨진다. 통합 대조가 다른 단계에서 상쇄되어 못 잡는 함수 단위 회귀를 잡는다.
+
+macOS·Linux 에서 Windows 인코딩 회귀는 아래처럼 흉내 낼 수 있다.
+
+```bash
+PYTHONIOENCODING=cp949 python3 src/cli.py > /dev/null 2>&1; echo $?   # 0 이어야 정상
+```
+
+`src/cli.py` 의 `sys.stdout.reconfigure` 를 지우면 이 명령이 `—`(U+2014)에서
+`UnicodeEncodeError` 로 죽어 종료 코드 1이 된다.
+
 ### 윈도우 한국어 콘솔의 인코딩
 
 이 리포트는 `—`(U+2014) 와 `⚠`(U+26A0) 을 쓴다. 한국어 윈도우의 기본 콘솔

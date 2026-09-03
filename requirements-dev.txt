@@ -1,0 +1,3 @@
+# 개발·테스트 전용. 런타임 의존성은 requirements.txt 에만 둔다 (그쪽은 두 개로 유지).
+-r requirements.txt
+pytest>=8.0
