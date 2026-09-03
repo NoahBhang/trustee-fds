@@ -187,20 +187,15 @@ class Dataset:
         """
         issues = []
         missing_refs = {}  # (party_id, role) -> [(tx_id, case_id), ...]
-        
+        tx_case = {t["transaction_id"]: t["case_id"] for t in self.transactions}
+
         for link in self.links:
             party_id = link["party_id"]
-            case_id = None
-            
-            # case_id 찾기
-            for tx in self.transactions:
-                if tx["transaction_id"] == link["transaction_id"]:
-                    case_id = tx["case_id"]
-                    break
-            
+            case_id = tx_case.get(link["transaction_id"])
+
             if case_id is None:
                 continue  # 거래가 없으면 다른 검사에서 잡음
-            
+
             # 복합 키로 존재 여부 확인
             if (case_id, party_id) not in self.parties:
                 key = (party_id, link["role"])
@@ -267,50 +262,37 @@ class Dataset:
 
     def _check_case_id_cross_validation(self) -> list[IntegrityIssue]:
         """
-        1군 ③ : parties의 case_id와 참조하는 거래의 case_id가 일치하는지 확인.
+        1군 ③ : parties 는 있는데 이 사건에 속하지 않은 당사자를 거래가 참조.
         다른 사건의 당사자가 이 사건에 끼어들 수 없도록.
+
+        party_id 가 여러 사건에 등재될 수 있으므로 first-match 가 아니라 등재된
+        사건 집합 전체와 대조한다 (복합 키 도입 후 갱신되지 않았던 부분).
+        (case_id, party_id) 자체가 없는 경우는 _check_party_id_references 가 잡는다.
         """
-        issues = []
-        cross_contam = {}  # (party_id, assigned_case, foreign_case) -> [tx_id, ...]
-        
+        tx_case = {t["transaction_id"]: t["case_id"] for t in self.transactions}
+        assigned = {}                       # party_id -> {등재된 case_id, ...}
+        for (case_id, pid) in self.parties:
+            assigned.setdefault(pid, set()).add(case_id)
+
+        cross_contam = {}                   # (party_id, foreign_case) -> [tx_id, ...]
         for link in self.links:
-            party_id = link["party_id"]
-            tx_id = link["transaction_id"]
-            
-            # 거래의 case_id
-            tx_case_id = None
-            for tx in self.transactions:
-                if tx["transaction_id"] == tx_id:
-                    tx_case_id = tx["case_id"]
-                    break
-            
-            if tx_case_id is None:
-                continue  # 거래 없음, 다른 검사에서 잡음
-            
-            # party가 parties에 있는지 확인 (어느 case_id인지)
-            assigned_case = None
-            for (case_id, pid), _ in self.parties.items():
-                if pid == party_id:
-                    assigned_case = case_id
-                    break
-            
-            if assigned_case is not None and assigned_case != tx_case_id:
-                key = (party_id, assigned_case, tx_case_id)
-                if key not in cross_contam:
-                    cross_contam[key] = []
-                cross_contam[key].append(tx_id)
-        
-        for (party_id, assigned_case, foreign_case), tx_ids in sorted(cross_contam.items()):
-            details = [{"party_id": party_id, "assigned_to": assigned_case, 
-                       "referenced_by": foreign_case, "tx_ids": tx_ids}]
-            message = f"{party_id} — {assigned_case}에 속하는데 {foreign_case} 거래에서 참조"
+            pid, tx_id = link["party_id"], link["transaction_id"]
+            tx_case_id = tx_case.get(tx_id)
+            if tx_case_id is None or pid not in assigned:
+                continue                    # 다른 검사에서 잡음
+            if tx_case_id not in assigned[pid]:
+                cross_contam.setdefault((pid, tx_case_id), []).append(tx_id)
+
+        issues = []
+        for (pid, foreign_case), tx_ids in sorted(cross_contam.items()):
+            homes = ", ".join(sorted(assigned[pid]))
             issues.append(IntegrityIssue(
                 category=IssueCategory.REFERENTIAL,
                 severity=IssueSeverity.CRITICAL,
-                message=message,
-                details=details
+                message=f"{pid} — {homes} 에 등재됐는데 {foreign_case} 거래에서 참조",
+                details=[{"party_id": pid, "등재": homes,
+                          "참조한_사건": foreign_case, "tx_ids": tx_ids}],
             ))
-        
         return issues
 
     def _check_transaction_id_references(self) -> list[IntegrityIssue]:
