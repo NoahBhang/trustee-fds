@@ -201,6 +201,10 @@ temporal_scope:
   validity_fields:
     from: party.relation_valid_from
     to:   party.relation_valid_to
+  # 관계 종료일 전후 이 일수 이내의 거래에 relation_boundary 플래그를 붙인다.
+  # 조문 근거 없는 운영값. engine.py 의 _apply_temporal_window / _classify_former_spouse
+  # 가 읽는다 (두 곳이 같은 값을 써야 하므로 여기 한 곳에 둔다).
+  boundary_window_days: 30
   rules:
     - if: "relation_valid_from is null and relation_valid_to is null"
       then: "기간 정보 없음 → 상시 유효로 간주하되 relation_period_unknown 플래그"

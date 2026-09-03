@@ -60,6 +60,10 @@ temporal_filter:
 
   combine: union
 
+  # 경계일 거래 표시 폭(일). 조문 근거 없는 운영값 — 기준일·창 시작일에서 이 일수
+  # 이내면 boundary_case 플래그를 붙인다. engine.py run() 이 읽는다.
+  boundary_days: 3
+
   # 소급기간. 당사자 관계는 거래 테이블이 아니라 parties / transaction_parties 에
   # 있으므로, 분기 값은 related_party.yaml 의 판정 결과를 받아 쓴다.
   # principal_debtor 나 ultimate_beneficiary 의 관계는 절대 여기에 들어오지 않는다.
@@ -113,7 +117,7 @@ action_filter:
 
   # 다른 조문으로 라우팅. 조용히 버리지 않고 사유를 남긴다.
   route_out:
-    - when: 'action_type == "debt_repayment" and abs(value_out - liability_reduction) / value_out <= 0.02'
+    - when: 'action_type == "debt_repayment" and abs(consideration_paid - liability_reduction) / consideration_paid <= tolerance'
       to: art391-1/2/3
       reason: "자기 채무의 정상 변제. 순재산 중립 → 무상부인 대상 아님. 편파부인 별도 검토."
       tolerance: 0.02
@@ -216,14 +220,17 @@ economic_substance:
     basis: >
       대법원 2014. 5. 29. 선고 2014다765 — '반대급부가 지나치게 근소하여
       사실상 무상행위와 다름없는 경우'. 법률·판례는 고정 비율 기준을 두지 않는다.
+    # 실행값. when 문자열은 사람이 읽는 명세, threshold 가 코드가 읽는 숫자다
+    # (triage_bands 가 max 를 별도 필드로 두는 것과 같은 패턴).
+    threshold: 0.50
     outcome:
       - when: "ratio is undefined"
         result: unresolved
         note: "공정가치 미상. 배제하지 않고 '평가 필요' 로 분리 표시한다."
-      - when: "ratio <= 0.50"
+      - when: "ratio <= threshold"
         result: candidate
         note: "무상행위와 동일시할 수 있는지 검토 대상. 임계값은 조사 기준일 뿐이다."
-      - when: "ratio > 0.50"
+      - when: "ratio > threshold"
         result: not_candidate
         note: >
           정상 대가 범위로 보아 후보에서 제외하되, 제외 사유와 산식을 기록한다.
@@ -244,6 +251,10 @@ fund_flow_analysis:
   min_confidence: probable
   # alleged(진술뿐)는 신호로 인정하지 않는다. payment_verified != Y 인 대가를
   # 0으로 처리하는 것과 같은 원칙 — 근거 없는 진술만으로 신호를 세우지 않는다.
+  #
+  # confidence 의 서열. 낮음 → 높음 순. engine.py 가 이 순서로 min_confidence 와
+  # 비교한다 (README §4 transaction_links.confidence 와 일치해야 한다).
+  confidence_order: [alleged, probable, verified]
   eligible_link_types: [funds_flow]
   # same_asset(동일 자산 회귀)은 별도 술어(asset_returned, 미구현)로 분리한다.
   # 부동산은 등기부로, 등록 동산(자동차 등)은 등록 이력으로 추적 가능하지만

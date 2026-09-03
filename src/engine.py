@@ -144,15 +144,18 @@ class Dataset:
                 if l["transaction_id"] == tx_id and l["role"] == role
                 and (case_id, l["party_id"]) in self.parties]
 
-    def inbound_fund_flows(self, case_id, tx_id):
+    def inbound_fund_flows(self, case_id, tx_id, link_types):
         """
-        이 거래를 to_transaction_id 로 하는 funds_flow 링크들을 반환.
+        이 거래를 to_transaction_id 로 하는, link_type 이 link_types 안에 드는
+        링크들을 반환. link_types 는 art391_4_gratuitous.yaml
+        fund_flow_analysis.eligible_link_types 에서 온다.
         case_id 를 명시적으로 요구해 교차 사건 오염을 막는다 (parties_of() 와 같은 이유).
         """
+        allowed = set(link_types)
         return [l for l in self.tx_links
                 if l["case_id"] == case_id
                 and l["to_transaction_id"] == tx_id
-                and l["link_type"] == "funds_flow"]
+                and l["link_type"] in allowed]
 
     def _check_all_integrity(self) -> list[IntegrityIssue]:
         """모든 무결성 검사를 수행하고 문제 목록을 반환.
@@ -583,6 +586,11 @@ def load_rules(root: Path):
 
 # ------------------------------------------------------- 1단계: 관계·시간
 
+def _boundary_window_days(rp_rules):
+    """관계 종료일 전후 relation_boundary 플래그를 붙일 폭(일). related_party.yaml."""
+    return rp_rules.get("temporal_scope", {}).get("boundary_window_days", 30)
+
+
 def _apply_temporal_window(verdict, flags, party, tx_date, rp_rules):
     """
     관계 유효기간(relation_valid_from/to) 밖의 거래는 not_related 로 되돌린다.
@@ -595,7 +603,7 @@ def _apply_temporal_window(verdict, flags, party, tx_date, rp_rules):
             verdict, flags = "not_related", flags + ["relation_not_yet"]
         elif to and tx_date > to:
             verdict, flags = "not_related", flags + ["relation_ended"]
-    if to and abs((tx_date - to).days) <= 30:
+    if to and abs((tx_date - to).days) <= _boundary_window_days(rp_rules):
         flags = flags + ["relation_boundary"]
     if not frm and not to and verdict != "not_related":
         flags = flags + ["relation_period_unknown"]
@@ -675,7 +683,7 @@ def _classify_former_spouse(party, tx_date, rp_rules):
         # 혼인 기간 중(또는 종료일 미상) — 배우자와 동일하게 취급
         return "related", flags
 
-    if abs((tx_date - to).days) <= 30:
+    if abs((tx_date - to).days) <= _boundary_window_days(rp_rules):
         flags.append("relation_boundary")
 
     if dep == "Y":
@@ -831,7 +839,8 @@ def undervalue_verdict(tx, ratio, rule):
         return "candidate"
     if ratio is None:
         return "unresolved"
-    return "candidate" if ratio <= 0.50 else "not_candidate"
+    threshold = ua["threshold"]     # YAML 이 실행값을 명시한다. when 문자열은 명세.
+    return "candidate" if ratio <= threshold else "not_candidate"
 
 
 def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
@@ -849,12 +858,13 @@ def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
     min_rank = confidence_rank[ffa["min_confidence"]]
     window = ffa["proximity_window_days"]
     max_hops = ffa.get("max_hops", 1)
+    link_types = ffa["eligible_link_types"]
 
     in_window, delayed = [], []
     if depth > max_hops:
         return in_window, delayed
 
-    for link in ds.inbound_fund_flows(case_id, tx_id):
+    for link in ds.inbound_fund_flows(case_id, tx_id, link_types):
         if confidence_rank.get(link["confidence"], -1) < min_rank:
             continue  # 약한 고리 — 이 경로는 여기서 끊는다
 
@@ -904,7 +914,8 @@ def evaluate_funds_circled_back(ds, case_id, tx, rule):
     if not ffa:
         return False, []
 
-    confidence_rank = {"alleged": 0, "probable": 1, "verified": 2}
+    # confidence 서열은 YAML 이 정한다 (README §4 confidence 어휘와 일치해야 함).
+    confidence_rank = {c: i for i, c in enumerate(ffa["confidence_order"])}
     tx_id = tx["transaction_id"]
     td = _date(tx["transaction_date"])
 
@@ -1014,6 +1025,7 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
     check_predicate_coverage(rule)
 
     af = rule["action_filter"]
+    boundary_days = rule["temporal_filter"]["boundary_days"]
     results = []
 
     for tx in ds.transactions:
@@ -1047,7 +1059,7 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
             continue
         nearest = min(anchors, key=lambda a: abs((a[1] - td).days))
         days_to_anchor = (nearest[1] - td).days
-        if abs(days_to_anchor) <= 3 or abs((td - start).days) <= 3:
+        if abs(days_to_anchor) <= boundary_days or abs((td - start).days) <= boundary_days:
             res.flags.append("boundary_case")
         if upper and td > upper:
             res.flags.append("post_adjudication_soft")   # 배제하지 않고 표시만
