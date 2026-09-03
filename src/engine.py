@@ -93,12 +93,23 @@ class Dataset:
     links: list                                     # transaction_parties row[]
     tx_links: list = field(default_factory=list)     # transaction_links row[] (자금 흐름)
     integrity_issues: list[IntegrityIssue] = field(default_factory=list)
+    # 상대방 없는 단독행위 목록 (art391_4_gratuitous.yaml action_filter.unilateral_acts).
+    # legal_counterparty 커버리지 검사에서 제외된다. 근거는 그 YAML 주석 참조.
+    unilateral_acts: frozenset = field(default_factory=frozenset)
+    # 원본 행 리스트 — dict 로 접힌 뒤에는 볼 수 없는 중복 키를 검사하려면 필요하다.
+    _raw_cases: list = field(default_factory=list, repr=False)
+    _raw_parties: list = field(default_factory=list, repr=False)
 
     @classmethod
-    def load(cls, root: Path):
-        """데이터 로드 후 즉시 무결성 검사 수행."""
+    def load(cls, root: Path, unilateral_acts=()):
+        """데이터 로드 후 즉시 무결성 검사 수행.
+
+        unilateral_acts: 상대방 없는 단독행위 action_type 집합. 룰을 먼저 로드해
+        art391_4_gratuitous.yaml 의 action_filter.unilateral_acts 를 넘겨준다.
+        비워두면(기본값) 모든 거래가 legal_counterparty 커버리지 검사를 받는다.
+        """
         d = root / "data" / "sample"
-        
+
         # 원본 데이터 읽기
         cases_rows = _rows(d / "cases.csv")
         transactions_rows = _rows(d / "transactions.csv")
@@ -106,7 +117,7 @@ class Dataset:
         links_rows = _rows(d / "transaction_parties.csv")
         tx_links_path = d / "transaction_links.csv"
         tx_links_rows = _rows(tx_links_path) if tx_links_path.exists() else []
-        
+
         # 복합 키로 parties 로드
         ds = cls(
             cases={r["case_id"]: r for r in cases_rows},
@@ -114,8 +125,11 @@ class Dataset:
             parties={(r["case_id"], r["party_id"]): r for r in parties_rows},
             links=links_rows,
             tx_links=tx_links_rows,
+            unilateral_acts=frozenset(unilateral_acts),
+            _raw_cases=cases_rows,
+            _raw_parties=parties_rows,
         )
-        
+
         # 로드 직후 무결성 검사 수행
         ds.integrity_issues = ds._check_all_integrity()
         return ds
@@ -208,21 +222,28 @@ class Dataset:
         """
         1군 ② : 모든 거래가 legal_counterparty를 적어도 하나 가져야 한다.
         없으면 조용히 6월로 판정된다 (판정 오류).
+
+        예외: unilateral_acts (상속포기 등 상대방 없는 단독행위). legal_counterparty
+        부재가 정상이며, 2단계에서 route_out 되어 소급기간 판정에 도달하지 않는다.
+        근거는 art391_4_gratuitous.yaml action_filter.unilateral_acts 주석 참조.
         """
         issues = []
         missing_coverage = []
-        
+
         for tx in self.transactions:
             case_id = tx["case_id"]
             tx_id = tx["transaction_id"]
-            
+
+            if tx.get("action_type") in self.unilateral_acts:
+                continue  # 상대방 없는 단독행위 — 부재가 정상
+
             # 이 거래의 legal_counterparty 확인
-            cps = [l for l in self.links 
+            cps = [l for l in self.links
                    if l["transaction_id"] == tx_id and l["role"] == "legal_counterparty"]
-            
+
             if not cps:
                 missing_coverage.append({"tx_id": tx_id, "case_id": case_id})
-        
+
         if missing_coverage:
             issues.append(IntegrityIssue(
                 category=IssueCategory.REFERENTIAL,

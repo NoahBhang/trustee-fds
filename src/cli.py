@@ -179,9 +179,12 @@ def validate(results):
 
 
 def main():
-    ds = Dataset.load(ROOT)
+    # 룰을 먼저 로드한다 — 무결성 검사가 unilateral_acts(상대방 없는 단독행위)를
+    # 알아야 legal_counterparty 커버리지 검사에서 그것들을 제외할 수 있다.
     rules = load_rules(ROOT)
-    
+    unilateral = rules["art391-4-gratuitous"]["action_filter"].get("unilateral_acts", [])
+    ds = Dataset.load(ROOT, unilateral_acts=unilateral)
+
     # 무결성 검사 결과 출력 (리포트 앞에)
     report_integrity(ds)
     
