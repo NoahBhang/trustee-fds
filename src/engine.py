@@ -155,7 +155,14 @@ class Dataset:
                 and l["link_type"] == "funds_flow"]
 
     def _check_all_integrity(self) -> list[IntegrityIssue]:
-        """모든 무결성 검사를 수행하고 문제 목록을 반환."""
+        """모든 무결성 검사를 수행하고 문제 목록을 반환.
+
+        비대칭 주의: check_predicate_coverage() 는 priority_signals 의 id 와 코드
+        구현이 어긋나면 UnimplementedPredicate 로 즉시 실패시켜 YAML↔코드 일치를
+        강제한다. 데이터 제약(related_party.yaml 의 share_sum_mismatch 등)에는 그런
+        강제 장치가 없다 — 아래 검사들이 수동으로 대응한다. YAML 에 제약을 추가하면
+        여기 대응 검사도 함께 추가해야 한다.
+        """
         issues = []
         issues += self._check_party_id_references()
         issues += self._check_legal_counterparty_coverage()
@@ -332,36 +339,55 @@ class Dataset:
     def _check_duplicate_keys(self) -> list[IntegrityIssue]:
         """
         2군 ⑤ : 각 테이블의 키 중복 여부.
-        - cases, parties (복합키), transaction_parties의 중복 확인.
+
+        cases(case_id), parties((case_id, party_id))는 dict 로 접히면서 뒤 행이
+        앞 행을 조용히 덮어쓴다 — relation_type 이 다른 중복 parties 행이 있으면
+        판정이 소리 없이 바뀐다. 그래서 dict 가 아니라 원본 행 리스트
+        (_raw_cases / _raw_parties)에서 검사한다. load() 가 넘겨준다.
+
+        transaction_parties 는 list 라 접히지 않지만 같은 링크가 중복될 수 있다
+        (중복 자체는 판정을 바꾸지 않아 WARNING).
         """
         issues = []
-        
-        # cases의 중복 (dict 컴프리헨션이라 뒤 행이 앞 행을 덮어씀)
-        # 이미 로드된 cases dict는 중복이 있었으면 뒤 행으로 덮어씌워 졌으므로
-        # 원본 데이터를 재확인하려면 파일을 다시 읽어야 하는데,
-        # 지금은 로드된 데이터만 검사하므로 생략
-        
-        # parties의 중복은 복합 키이므로 dict 컴프리헨션 시점에 이미 덮어씌워짐
-        # 원본 rows를 다시 확인해야 하는데 접근 불가능하므로 현재는 생략
-        
-        # transaction_parties는 list이므로 같은 링크가 여러 번 나올 수 있음
-        seen_links = set()
-        dup_links = []
-        for link in self.links:
-            key = (link["transaction_id"], link["party_id"], link["role"])
-            if key in seen_links:
-                dup_links.append(key)
-            seen_links.add(key)
-        
-        if dup_links:
+
+        def _dups(rows, keyfn):
+            seen, dup = set(), []
+            for r in rows:
+                k = keyfn(r)
+                if k in seen:
+                    dup.append(k)
+                seen.add(k)
+            return dup
+
+        case_dups = _dups(self._raw_cases, lambda r: r["case_id"])
+        if case_dups:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="cases.csv 에 중복된 case_id — 뒤 행이 사건 정의를 조용히 덮어씀",
+                details=[{"case_id": c} for c in case_dups],
+            ))
+
+        party_dups = _dups(self._raw_parties, lambda r: (r["case_id"], r["party_id"]))
+        if party_dups:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="parties.csv 에 중복된 (case_id, party_id) — 관계 사실이 조용히 덮어씌워짐",
+                details=[{"case_id": c, "party_id": p} for c, p in party_dups],
+            ))
+
+        link_dups = _dups(self.links,
+                          lambda r: (r["transaction_id"], r["party_id"], r["role"]))
+        if link_dups:
             issues.append(IntegrityIssue(
                 category=IssueCategory.REFERENTIAL,
                 severity=IssueSeverity.WARNING,
-                message="transaction_parties.csv에 중복된 링크",
-                details=[{"transaction_id": t, "party_id": p, "role": r} 
-                        for t, p, r in dup_links]
+                message="transaction_parties.csv 에 중복된 링크",
+                details=[{"transaction_id": t, "party_id": p, "role": r}
+                         for t, p, r in link_dups],
             ))
-        
+
         return issues
 
     def _check_case_id_coverage(self) -> list[IntegrityIssue]:
@@ -392,11 +418,54 @@ class Dataset:
 
     def _check_share_ratio_sum(self) -> list[IntegrityIssue]:
         """
-        값 제약 ⑦ : share_ratio의 합이 1.0이 아닌 경우.
-        현재 transactions에 share_ratio가 없으므로 나중에 추가될 때 구현.
+        값 제약 ⑦ : 같은 (거래, 역할)의 share_ratio 합이 1.0이 아닌 경우.
+
+        transaction_parties.csv 에 share_ratio 컬럼이 있고, 상대방이 복수인 거래
+        (T012)는 지분 비율로 배분한다(related_party.yaml multiple_counterparties).
+        합이 1.0에서 벗어나면 출연 가치 배분이 조용히 틀어진다.
+        부동소수점 합이므로 허용오차 1e-6.
+
+        일부 행만 share_ratio 를 기재한 경우(부분 배분)는 검증할 수 없어 별도
+        표시한다 — 전부 기재하거나 전부 비우거나 해야 한다.
         """
-        # 현재는 구현하지 않음 (transaction_parties에 share_ratio 필드 추가 필요)
-        return []
+        issues = []
+        TOL = 1e-6
+
+        by_key = {}   # (tx_id, role) -> [share_ratio 문자열, ...]
+        for l in self.links:
+            by_key.setdefault((l["transaction_id"], l["role"]), []).append(l.get("share_ratio"))
+
+        mismatch, partial = [], []
+        for (tx_id, role), raw in by_key.items():
+            vals = [_num(x) for x in raw]
+            present = [v for v in vals if v is not None]
+            if not present:
+                continue                       # 단독 상대방 등 — 배분 안 함
+            if len(present) != len(vals):
+                partial.append({"transaction_id": tx_id, "role": role,
+                                "기재": len(present), "전체": len(vals)})
+                continue
+            total = sum(present)
+            if abs(total - 1.0) > TOL:
+                mismatch.append({"transaction_id": tx_id, "role": role,
+                                 "share_ratio_합": round(total, 6),
+                                 "상대방_수": len(present)})
+
+        if mismatch:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.VALUE_CONSTRAINT,
+                severity=IssueSeverity.WARNING,
+                message="share_ratio 합이 1.0이 아님 (share_sum_mismatch) — 출연 가치 배분이 틀어짐",
+                details=mismatch,
+            ))
+        if partial:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.VALUE_CONSTRAINT,
+                severity=IssueSeverity.WARNING,
+                message="같은 (거래, 역할)에서 일부만 share_ratio 기재 — 배분 검증 불가",
+                details=partial,
+            ))
+        return issues
 
     def _check_tx_link_references(self) -> list[IntegrityIssue]:
         """

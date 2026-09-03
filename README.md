@@ -361,9 +361,14 @@ T015·T014·T028·T017이 그 경계다.
 
 | 심각도 | 의미 | 예 |
 |---|---|---|
-| CRITICAL | 조용히 판정 오류로 이어짐 | `legal_counterparty` 누락 → 소급기간이 잘못 6월로 판정 |
-| WARNING | 조용히 데이터가 소실됨 | `ultimate_beneficiary` 누락, 고아 링크, 중복 키 |
+| CRITICAL | 조용히 판정 오류로 이어짐 | `legal_counterparty` 누락 → 소급기간이 잘못 6월로 판정 / `cases`·`parties` 중복 키 → 뒤 행이 앞 행을 조용히 덮어씀 / 링크의 시간 역행·자기참조·교차 사건 |
+| WARNING | 조용히 데이터가 소실됨 | `ultimate_beneficiary` 누락, 고아 링크, 중복 `transaction_parties` 링크, `share_ratio` 합 ≠ 1.0 |
 | INFO | 이미 예외로 죽지만 진단이 나쁨 | 존재하지 않는 `case_id` 참조 |
+
+검사 목록(`Dataset._check_*`): `party_id` 참조 · `legal_counterparty` 커버리지
+(`action_filter.unilateral_acts` 는 제외) · 교차 사건 검증 · 고아 거래 링크 ·
+중복 키(`cases`/`parties`/`transaction_parties`) · `case_id` 커버리지 ·
+`share_ratio` 합 · `transaction_links` 참조·시간순·자기참조.
 
 발견된 문제는 예외를 던지지 않고 리포트 상단에 별도 섹션으로 표시한다.
 불완전한 실제 사건 데이터를 이유로 리포트 전체를 막으면 도구로서 쓸모가
@@ -374,6 +379,14 @@ T015·T014·T028·T017이 그 경계다.
 
 `parties` 는 `(case_id, party_id)` 복합 키로 색인한다. 단순 `party_id` 키였다면
 CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했을 것이다.
+중복 검사는 dict 로 접히기 전의 원본 행(`_raw_cases`/`_raw_parties`)에서 한다 —
+`relation_type` 이 다른 중복 `parties` 행은 판정을 소리 없이 바꾸기 때문이다.
+
+**비대칭 한 가지.** `check_predicate_coverage()` 는 `priority_signals` 의 id 와
+코드 구현이 어긋나면 `UnimplementedPredicate` 로 즉시 실패시켜 YAML↔코드 일치를
+강제한다. 데이터 제약(`share_sum_mismatch` 등)에는 그런 강제 장치가 없어, 위
+`_check_*` 들이 수동으로 대응한다. YAML 에 제약을 추가하면 대응 검사도 함께
+추가해야 한다.
 
 ---
 
