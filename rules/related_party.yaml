@@ -16,13 +16,18 @@
 #
 # 검토자 확인란:
 #   [x] 시행령 제4조 원문 대조 완료 (검토일: 2026-09-03 / 검토자: Claude / 출처: 국가법령정보센터)
-#       미해결: former_spouse · affiliate · officer 3개 유형은 사실 데이터 부족으로 verify 유지
 #       주의:   affinity/collateral_relative 는 촌수 필드 부재로 '범위 내'를 가정함
+#   [x] former_spouse · affiliate · officer 동적 판정 구현 (검토일: 2026-09-03 / 검토자: Claude)
+#       parties.csv 구조화 필드(ownership_percentage, officer_of, post_divorce_dependency)로
+#       사실이 확인되면 related/not_related 확정, 미확인이면 verify(사유 명시).
+#       ownership_test 의 30% 임계값은 '계열회사' 정의(공정거래법)의 근사치 — 법률
+#       전문가 검토 시 재확인 필요. P-007(former_spouse)의 동일인 여부는 룰이
+#       판정하지 않는 사실관계 조사 사항으로 남김.
 #   [ ] 법률 전문가 검토 완료 (검토일: ____ / 검토자: ____)
 # =============================================================================
 
 rule_id: related-party-classification
-version: 0.2.0
+version: 0.3.0
 status: spec_verified
 legal_basis:
   - "채무자회생법 제391조 제4호 — 무상행위의 부인 (지급정지·파산신청 후 또는 그 전 6월 이내)"
@@ -80,6 +85,27 @@ statute_text:
 #   related      특수관계인으로 취급 → 소급기간 12월
 #   not_related  일반 상대방 → 소급기간 6월
 #   verify       판단 보류 → 넓은 창(12월) 적용 + 검토 플래그
+#
+# -----------------------------------------------------------------------------
+# affiliate / officer 판정 — 지분율 기준 (동적 판정, 아래 classification 항목은
+# 참고용 기본값이며 실제 판정은 engine.py 의 classify_relation() 이 이 값과
+# parties.csv 의 ownership_percentage/officer_of 필드로 수행한다.
+# -----------------------------------------------------------------------------
+ownership_test:
+  threshold_percent: 30
+  note: >
+    개인 채무자(제1항 라목·마목)와 법인 채무자(제2항 다목·라목)의 30% 출자 기준은
+    수렴한다. 법인 채무자의 '계열회사'(제2항 나목, 공정거래법 제2조제3호 정의)는
+    엄밀히는 기업집단 지정 여부로 판단하며 지분율만으로 완전히 대체되지 않는다 —
+    이 임계값은 근사치이며 legal_reviewed 단계에서 재검토가 필요하다.
+    ownership_percentage 가 없으면 verify(ownership_percentage_unknown).
+    threshold_percent 미만이면 verify(사실상 영향력 가능성을 배제할 수 없음) —
+    not_related 로 자동 확정하지 않는다.
+  officer_note: >
+    officer_of 가 가리키는 party 의 relation_type == self 이면(채무자 법인 자신의
+    임원, 제2항 가목) 법인 채무자에 한해 related. affiliate 를 가리키면 그 법인의
+    ownership_test 판정을 물려받는다. officer_of 가 비어 있으면 verify.
+
 classification:
   self:
     verdict: not_related
@@ -122,37 +148,40 @@ classification:
       [예외] 급여 외에 본인의 재산에 생계를 의존하는 사정이 인정되면 다목에
       해당할 수 있으나 드물다. 그런 경우엔 relation_type 을 별도로 코딩한다.
 
-  # --- 채무자가 개인이냐 법인이냐에 따라 갈리는 유형 → verify ---
+  # --- 채무자가 개인이냐 법인이냐에 따라 갈리는 유형 → 동적 판정(engine.py) ---
   former_spouse:
-    verdict: verify
+    verdict: verify   # engine.py 가 아래 로직으로 동적 판정. 이 값은 미구현 시 폴백용.
     note: >
       시행령 제4조 어느 목에도 '전 배우자'는 열거되어 있지 않다.
-      행위 당시 혼인관계(사실혼 포함)가 존속했다면 가목의 배우자이므로 relation_type
-      을 spouse 로 코딩해야 한다. 이혼 후 시점의 거래라면 배우자가 아니고, 인척관계도
-      이혼으로 종료되므로(민법 제775조 제1항) 원칙적으로 특수관계인이 아니다.
-      [불확실] ① 위장이혼 — 판례는 실질을 본다. ② 이혼 후에도 본인의 금전·재산으로
-      생계를 유지하면 다목에 해당할 수 있다. ③ 동일인 여부 등 사실관계(샘플 P-007).
-      순수한 시점 문제는 temporal_scope 의 relation_valid_to 로 판정된다.
+      혼인 기간(relation_valid_from~relation_valid_to) 중 거래는 가목의 배우자와
+      동일하게 related 로 판정한다. 이혼 후 거래는 원칙 not_related 이나,
+      post_divorce_dependency = Y (본인의 금전·재산으로 생계 유지, 다목)이면
+      related. 그 필드가 비어 있으면 verify.
+      [사실관계 조사 필요 — 룰로 판정하지 않음] ① 위장이혼(판례는 실질을 봄).
+      ② 동일인 여부(샘플 P-007 — P-001과 동일인이면 T001·T003의 소급기간이
+      바뀌지만, 이는 관재인의 사실 조사 사항이지 이 룰이 추정할 몫이 아니다.
   affiliate:
-    verdict: verify
+    verdict: verify   # engine.py 가 ownership_test 로 동적 판정. 이 값은 폴백용.
     note: >
       채무자가 법인인 경우: 제2항 나목 — '계열회사(공정거래법 제2조제3호) 및 그
       임원' → 특수관계인.
       채무자가 개인인 경우: 제1항 제1호 라목·마목 — 본인이 단독 또는 가~다목
       관계자와 합하여 100분의 30 이상을 출자하거나 임원의 임면 등으로 사실상
       영향력을 행사하는 법인만 해당.
-      [불확실] parties.csv 에 지분율이 구조화되어 있지 않고(자유서술 relation_basis),
-      관계 판정 단계에서 cases.debtor_type 을 참조하지 않는다. 30% 요건과 채무자
-      유형을 사람이 대조해야 한다. 샘플 CORP-AFF 는 '지분 62% 보유'(> 30%)이고
-      채무자가 법인이라 두 경로 모두에서 특수관계인이나, 룰은 자동 확정하지 않는다.
+      parties.csv 의 ownership_percentage(구조화 필드)로 동적 판정한다 — ownership_test
+      참조. 샘플 CORP-AFF 는 ownership_percentage=62 로 related 확정.
   officer:
-    verdict: verify
+    verdict: verify   # engine.py 가 officer_of 로 동적 판정. 이 값은 폴백용.
     note: >
       채무자가 법인인 경우: 제2항 가목 — '임원' → 특수관계인.
       채무자가 개인인 경우: 라목·마목의 '그 임원'에 한정 — 본인이 30% 이상
       출자하거나 사실상 영향력을 행사하는 법인의 임원만 해당하고, 무관한 법인의
       임원은 비해당.
       [불확실] 어느 법인의 임원인지, 그 법인과 채무자의 지분·지배 관계.
+      parties.csv 의 officer_of(구조화 필드, party_id 참조)로 동적 판정한다 —
+      ownership_test.officer_note 참조. officer_of 가 relation_type=self 인 party(채무자
+      법인 자신)를 가리키면 related, affiliate 인 party 를 가리키면 그 법인의
+      ownership_test 판정을 물려받는다.
 
   none:
     verdict: not_related

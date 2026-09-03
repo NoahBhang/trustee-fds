@@ -91,6 +91,7 @@ class Dataset:
     transactions: list                              # transaction_row[]
     parties: dict                                   # (case_id, party_id) → party_row
     links: list                                     # transaction_parties row[]
+    tx_links: list = field(default_factory=list)     # transaction_links row[] (자금 흐름)
     integrity_issues: list[IntegrityIssue] = field(default_factory=list)
 
     @classmethod
@@ -103,6 +104,8 @@ class Dataset:
         transactions_rows = _rows(d / "transactions.csv")
         parties_rows = _rows(d / "parties.csv")
         links_rows = _rows(d / "transaction_parties.csv")
+        tx_links_path = d / "transaction_links.csv"
+        tx_links_rows = _rows(tx_links_path) if tx_links_path.exists() else []
         
         # 복합 키로 parties 로드
         ds = cls(
@@ -110,6 +113,7 @@ class Dataset:
             transactions=transactions_rows,
             parties={(r["case_id"], r["party_id"]): r for r in parties_rows},
             links=links_rows,
+            tx_links=tx_links_rows,
         )
         
         # 로드 직후 무결성 검사 수행
@@ -126,6 +130,16 @@ class Dataset:
                 if l["transaction_id"] == tx_id and l["role"] == role
                 and (case_id, l["party_id"]) in self.parties]
 
+    def inbound_fund_flows(self, case_id, tx_id):
+        """
+        이 거래를 to_transaction_id 로 하는 funds_flow 링크들을 반환.
+        case_id 를 명시적으로 요구해 교차 사건 오염을 막는다 (parties_of() 와 같은 이유).
+        """
+        return [l for l in self.tx_links
+                if l["case_id"] == case_id
+                and l["to_transaction_id"] == tx_id
+                and l["link_type"] == "funds_flow"]
+
     def _check_all_integrity(self) -> list[IntegrityIssue]:
         """모든 무결성 검사를 수행하고 문제 목록을 반환."""
         issues = []
@@ -136,6 +150,9 @@ class Dataset:
         issues += self._check_duplicate_keys()
         issues += self._check_case_id_coverage()
         issues += self._check_share_ratio_sum()
+        issues += self._check_tx_link_references()
+        issues += self._check_tx_link_temporal_order()
+        issues += self._check_tx_link_self_reference()
         return issues
 
     def _check_party_id_references(self) -> list[IntegrityIssue]:
@@ -360,6 +377,107 @@ class Dataset:
         # 현재는 구현하지 않음 (transaction_parties에 share_ratio 필드 추가 필요)
         return []
 
+    def _check_tx_link_references(self) -> list[IntegrityIssue]:
+        """
+        transaction_links 참조 무결성:
+        - from/to transaction_id 가 transactions 에 존재하는가
+        - from/to 거래가 모두 link.case_id 와 일치하는가 (교차 사건 오염 방지)
+        parties_of() 와 같은 이유로 case_id 를 명시적으로 요구한다.
+        """
+        issues = []
+        tx_by_id = {t["transaction_id"]: t for t in self.transactions}
+        orphan, cross_contam = [], []
+
+        for l in self.tx_links:
+            from_tx = tx_by_id.get(l["from_transaction_id"])
+            to_tx = tx_by_id.get(l["to_transaction_id"])
+
+            if from_tx is None or to_tx is None:
+                orphan.append({
+                    "link_id": l["link_id"],
+                    "from_transaction_id": l["from_transaction_id"],
+                    "to_transaction_id": l["to_transaction_id"],
+                    "missing": ("from" if from_tx is None else "") +
+                               ("," if from_tx is None and to_tx is None else "") +
+                               ("to" if to_tx is None else "")
+                })
+                continue
+
+            if from_tx["case_id"] != l["case_id"] or to_tx["case_id"] != l["case_id"]:
+                cross_contam.append({
+                    "link_id": l["link_id"],
+                    "link_case_id": l["case_id"],
+                    "from_case_id": from_tx["case_id"],
+                    "to_case_id": to_tx["case_id"],
+                })
+
+        if orphan:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.WARNING,
+                message="존재하지 않는 거래를 참조하는 transaction_links",
+                details=orphan
+            ))
+        if cross_contam:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="link.case_id 와 참조 거래의 case_id 가 불일치 (교차 사건 오염)",
+                details=cross_contam
+            ))
+        return issues
+
+    def _check_tx_link_temporal_order(self) -> list[IntegrityIssue]:
+        """
+        자금은 미래에서 과거로 흐를 수 없다.
+        from 거래일 > to 거래일이면 데이터 입력 오류가 확실하다.
+        """
+        issues = []
+        tx_by_id = {t["transaction_id"]: t for t in self.transactions}
+        reversed_links = []
+
+        for l in self.tx_links:
+            from_tx = tx_by_id.get(l["from_transaction_id"])
+            to_tx = tx_by_id.get(l["to_transaction_id"])
+            if from_tx is None or to_tx is None:
+                continue  # _check_tx_link_references 에서 이미 잡음
+
+            fd, td = _date(from_tx["transaction_date"]), _date(to_tx["transaction_date"])
+            if fd and td and fd > td:
+                reversed_links.append({
+                    "link_id": l["link_id"],
+                    "from_transaction_id": l["from_transaction_id"],
+                    "from_date": str(fd),
+                    "to_transaction_id": l["to_transaction_id"],
+                    "to_date": str(td),
+                })
+
+        if reversed_links:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="시간 역행 링크 — from 거래일이 to 거래일보다 늦음",
+                details=reversed_links
+            ))
+        return issues
+
+    def _check_tx_link_self_reference(self) -> list[IntegrityIssue]:
+        """자기 자신을 참조하는 링크."""
+        issues = []
+        self_refs = [
+            {"link_id": l["link_id"], "transaction_id": l["from_transaction_id"]}
+            for l in self.tx_links
+            if l["from_transaction_id"] == l["to_transaction_id"]
+        ]
+        if self_refs:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="자기 자신을 참조하는 transaction_links",
+                details=self_refs
+            ))
+        return issues
+
 
 def load_rules(root: Path):
     rules = {}
@@ -375,13 +493,12 @@ def load_rules(root: Path):
 
 # ------------------------------------------------------- 1단계: 관계·시간
 
-def classify_relation(party, tx_date, rp_rules):
-    """관계라는 '사실'을 특수관계인 해당 여부라는 '판단'으로 옮긴다."""
-    rt = (party.get("relation_type") or "").strip()
-    entry = rp_rules["classification"].get(rt)
-    verdict = entry["verdict"] if entry else rp_rules["unknown_relation_type"]
-    flags = []
-
+def _apply_temporal_window(verdict, flags, party, tx_date, rp_rules):
+    """
+    관계 유효기간(relation_valid_from/to) 밖의 거래는 not_related 로 되돌린다.
+    former_spouse 를 제외한 모든 관계 유형이 공유하는 로직 — former_spouse 는
+    혼인기간을 related 로 취급해야 해서 자체 함수에서 이 로직을 직접 수행한다.
+    """
     frm, to = _date(party.get("relation_valid_from")), _date(party.get("relation_valid_to"))
     if verdict != "not_related":
         if frm and tx_date < frm:
@@ -389,12 +506,117 @@ def classify_relation(party, tx_date, rp_rules):
         elif to and tx_date > to:
             verdict, flags = "not_related", flags + ["relation_ended"]
     if to and abs((tx_date - to).days) <= 30:
-        flags.append("relation_boundary")
+        flags = flags + ["relation_boundary"]
     if not frm and not to and verdict != "not_related":
-        flags.append("relation_period_unknown")
+        flags = flags + ["relation_period_unknown"]
     if verdict == "verify":
-        flags.append(rp_rules["verify_behavior"]["flag"])
+        flags = flags + [rp_rules["verify_behavior"]["flag"]]
     return verdict, flags
+
+
+def _classify_affiliate(party, rp_rules):
+    """
+    지분율 기준 동적 판정. ownership_test.threshold_percent 이상이면 related.
+    미상이면 verify(사실 데이터 부재), 미달이면 verify(사실상 영향력 배제 못 함) —
+    임계값 미달을 not_related 로 자동 확정하지 않는다.
+    """
+    ot = rp_rules.get("ownership_test", {})
+    threshold = ot.get("threshold_percent", 30)
+    pct = _num(party.get("ownership_percentage"))
+    if pct is None:
+        return "verify", ["ownership_percentage_unknown"]
+    if pct >= threshold:
+        return "related", []
+    return "verify", ["ownership_below_threshold_de_facto_control_unassessed"]
+
+
+def _classify_officer(party, rp_rules, case_id, all_parties, debtor_type):
+    """
+    officer_of(party_id 참조)로 동적 판정.
+    - 채무자 법인 자신(relation_type=self)을 가리키면: 법인 채무자에 한해 related.
+    - affiliate 를 가리키면: 그 법인의 ownership_test 판정을 물려받는다.
+    - 'none'(무관한 법인)을 가리키면: not_related.
+    - 대상을 특정할 수 없으면: verify.
+    """
+    target_id = (party.get("officer_of") or "").strip()
+    if not target_id or all_parties is None or case_id is None:
+        return "verify", ["officer_of_unknown"]
+
+    target = all_parties.get((case_id, target_id))
+    if target is None:
+        return "verify", ["officer_of_unresolved"]
+
+    target_rt = (target.get("relation_type") or "").strip()
+
+    if target_rt == "self":
+        if debtor_type == "corporation":
+            return "related", ["officer_of_debtor_itself"]
+        # 개인 채무자는 '임원' 개념 자체가 성립하지 않는다 — 데이터 불일치 신호.
+        return "verify", ["officer_of_individual_debtor_data_inconsistency"]
+
+    if target_rt == "affiliate":
+        verdict, _ = _classify_affiliate(target, rp_rules)
+        return verdict, [f"officer_of_affiliate_{verdict}"]
+
+    if target_rt == "none":
+        return "not_related", []
+
+    return "verify", ["officer_of_relation_unclassified"]
+
+
+def _classify_former_spouse(party, tx_date, rp_rules):
+    """
+    혼인 기간(relation_valid_from~relation_valid_to) 중 거래는 배우자와 동일하게
+    related. 이혼 후 거래는 원칙 not_related 이나, post_divorce_dependency = Y
+    (다목 — 본인의 금전·재산으로 생계 유지)이면 related. 그 필드가 비어 있으면 verify.
+
+    동일인 여부(예: 샘플 P-007이 P-001과 동일인인지)는 사실관계 조사 문제이므로
+    이 함수는 판정하지 않는다 — parties.csv 에 별도 party 로 등재된 그대로 다룬다.
+    """
+    frm = _date(party.get("relation_valid_from"))
+    to = _date(party.get("relation_valid_to"))
+    dep = (party.get("post_divorce_dependency") or "").strip().upper()
+    flags = []
+
+    if frm and tx_date < frm:
+        return "not_related", ["relation_not_yet"]
+
+    if to is None or tx_date <= to:
+        # 혼인 기간 중(또는 종료일 미상) — 배우자와 동일하게 취급
+        return "related", flags
+
+    if abs((tx_date - to).days) <= 30:
+        flags.append("relation_boundary")
+
+    if dep == "Y":
+        return "related", flags + ["post_divorce_dependency_confirmed"]
+    if dep == "N":
+        return "not_related", flags + ["relation_ended"]
+    return "verify", flags + [rp_rules["verify_behavior"]["flag"], "post_divorce_dependency_unknown"]
+
+
+def classify_relation(party, tx_date, rp_rules, case_id=None, all_parties=None, debtor_type=None):
+    """
+    관계라는 '사실'을 특수관계인 해당 여부라는 '판단'으로 옮긴다.
+
+    former_spouse / affiliate / officer 는 parties.csv 의 구조화 필드로 동적
+    판정한다(§related_party.yaml ownership_test). 그 외 유형은 classification
+    딕셔너리의 정적 verdict 를 시간 창(_apply_temporal_window)에 통과시킨다.
+    """
+    rt = (party.get("relation_type") or "").strip()
+
+    if rt == "former_spouse":
+        return _classify_former_spouse(party, tx_date, rp_rules)
+    if rt == "affiliate":
+        verdict, flags = _classify_affiliate(party, rp_rules)
+        return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
+    if rt == "officer":
+        verdict, flags = _classify_officer(party, rp_rules, case_id, all_parties, debtor_type)
+        return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
+
+    entry = rp_rules["classification"].get(rt)
+    verdict = entry["verdict"] if entry else rp_rules["unknown_relation_type"]
+    return _apply_temporal_window(verdict, [], party, tx_date, rp_rules)
 
 
 def resolve_lookback(verdicts, rule):
@@ -472,6 +694,48 @@ def undervalue_verdict(tx, ratio, rule):
     return "candidate" if ratio <= 0.50 else "not_candidate"
 
 
+def evaluate_funds_circled_back(ds, case_id, tx, rule):
+    """
+    이 거래로 자금이 흘러들어온(inbound funds_flow) 링크가 있는지, 그리고
+    그것이 신호로 인정되는지 판정한다. 링크는 사실, 이 함수는 판단.
+
+    반환: (circled_back: bool, flags: list[str])
+    """
+    ffa = rule.get("fund_flow_analysis")
+    if not ffa:
+        return False, []
+
+    min_confidence = ffa["min_confidence"]
+    confidence_rank = {"alleged": 0, "probable": 1, "verified": 2}
+    min_rank = confidence_rank[min_confidence]
+    window = ffa["proximity_window_days"]
+    td = _date(tx["transaction_date"])
+
+    circled_back = False
+    flags = []
+
+    for link in ds.inbound_fund_flows(case_id, tx["transaction_id"]):
+        if confidence_rank.get(link["confidence"], -1) < min_rank:
+            continue  # alleged 등 최소 신뢰도 미달 — 신호로 세우지 않는다
+
+        from_tx = next((t for t in ds.transactions
+                         if t["transaction_id"] == link["from_transaction_id"]), None)
+        if from_tx is None:
+            continue  # 무결성 검사가 별도로 잡는다
+
+        fd = _date(from_tx["transaction_date"])
+        if fd is None or td is None:
+            continue
+
+        gap_days = (td - fd).days
+        if gap_days <= window:
+            circled_back = True
+        else:
+            flags.append(ffa["outside_window_flag"])  # 배제하지 않고 표시만 (soft)
+
+    return circled_back, flags
+
+
 # ------------------------------------------------------------ 신호 술어
 
 PREDICATES = {}
@@ -511,8 +775,7 @@ def _p5(c): return "related" in c["pd_verdicts"]
 
 @predicate("funds_circled_back")
 def _p6(c):
-    # 거래 간 연결 테이블이 아직 없다. 로드맵 4단계.
-    return False
+    return c["funds_circled_back"]
 
 
 @predicate("non_cash_waiver")
@@ -577,13 +840,16 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         # --- 1단계: 관계 → 소급기간 → 시간 창
         cps = ds.parties_of(case_id, tx["transaction_id"], "legal_counterparty")
         pds = ds.parties_of(case_id, tx["transaction_id"], "principal_debtor")
+        debtor_type = case.get("debtor_type")
         cp_v, pd_v = [], []
         for p in cps:
-            v, fl = classify_relation(p, td, rp)
+            v, fl = classify_relation(p, td, rp, case_id=case_id, all_parties=ds.parties,
+                                       debtor_type=debtor_type)
             cp_v.append(v)
             res.flags += fl
         for p in pds:
-            v, _ = classify_relation(p, td, rp)
+            v, _ = classify_relation(p, td, rp, case_id=case_id, all_parties=ds.parties,
+                                      debtor_type=debtor_type)
             pd_v.append(v)
 
         months, basis, key = resolve_lookback(cp_v, rule)
@@ -629,8 +895,11 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         res.reached = "ranking"
         res.candidate = True
         res.priority = "unresolved" if verdict == "unresolved" else triage(ratio, rule)
+        circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule)
+        res.flags += ff_flags
         ctx = dict(tx=tx, value_in=vi, value_out=vo, cp_verdicts=cp_v, pd_verdicts=pd_v,
-                   counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor)
+                   counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor,
+                   funds_circled_back=circled_back)
         res.signals = [s["id"] for s in rule["priority_signals"] if PREDICATES[s["id"]](ctx)]
         results.append(res)
 
