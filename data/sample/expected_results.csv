@@ -23,7 +23,7 @@ T021,signal,Y,12,unresolved,funds_circled_back;related_counterparty,value_out �
 T022,action,Y,6,high,no_consideration,시효이익 포기로 소극재산 증가 / 대가비율 0 — 밴드는 비율만 본다. 신호 개수는 우선순위를 바꾸지 않는다
 T101,temporal,Y,6,high,role_split_guarantee;no_consideration;related_principal_debtor,핵심 테스트 — 주채무자만 특수관계이므로 1년 특칙 적용 금지
 T102,temporal,Y,12,high,related_counterparty;no_consideration,법률행위 상대방이 특수관계 법인 — 1년 창 적용
-T103,economic,Y,6,high,,"보증료 12,000,000 수령. 보증채무 액면 300,000,000 대비 비율 0.04 → high. 액면과 기대가치의 구별, 행위유형별 밴드 분리 필요 — README 열린 질문 참조"
+T103,economic,Y,6,medium,role_split_guarantee,"보증료 12,000,000 실제 수령. third_party_guarantee 는 signal_count_bands 로 판정(신호 1개 → medium) — applicable_action_types 밖이라 대가비율 0.04 자체는 우선순위에 안 쓰인다. 액면과 기대가치의 구별은 여전히 열린 질문(README §8)"
 T104,temporal,Y,12,high,no_consideration;related_counterparty,계열사 무상 이전
 T105,temporal,N,12,,,1년 창 밖 (2024-07-11 이전)
 T106,action,N,,,,일상 지출

@@ -170,6 +170,26 @@ economic_substance:
       - { max: 0.10, priority: high }
       - { max: 0.50, priority: medium }
       - { max: null, priority: low }
+    applicable_action_types: [gift, debt_forgiveness, right_waiver, prescription_benefit_waiver,
+                               gratuitous_loan_for_use, third_party_collateral, sale,
+                               collateral_provision, litigation_concession, inheritance_partition_waiver]
+    # candidate_types 전체에서 third_party_guarantee 만 뺀 목록이다 — 위 triage_bands 는
+    # "출연 대비 대가의 비율"을 재는 척도라, value_out 이 재산 자체의 가치(asset_fair_value
+    # /waived_right_value)일 때는 타당하다. third_party_guarantee 는 value_out 이 거의
+    # 전적으로 채무 액면(liability_increase_value)이라 이 비율이 '보증료율'이 되어
+    # 척도 자체가 달라진다 — 낮은 보증료율은 그 자체로 정상이지 무상성 신호가 아니다.
+    # T103(보증료 12,000,000 / 보증채무 300,000,000 = 0.04)이 이 문제를 드러냈다.
+    # [한계] collateral_provision 도 담보설정액(액면) 기준일 수 있어(샘플 T017) 같은
+    # 문제를 잠재적으로 안고 있으나, undervalue_assessment 가 먼저 걸러내 지금은
+    # 증상이 드러나지 않는다 — README §8 '액면과 기대가치의 구별'에 열어둔다.
+    # applicable_action_types 밖의 행위는 triage_bands 대신 signal_count_bands 로
+    # 우선순위를 매긴다 — "보증료율이 몇 %면 정상"이라는 근거 없는 숫자를 새로
+    # 만드는 대신, 이미 있는 다른 신호(no_consideration, role_split_guarantee 등)의
+    # 중첩 정도로 판단한다.
+    signal_count_bands:              # 내부 운영값. 조문 근거 없음.
+      - { max: 0, priority: low }
+      - { max: 2, priority: medium }
+      - { max: null, priority: high }
 
   # 매각의 염가 여부는 여기서 판정한다. 입력 action_type 이 아니라 계산 결과다.
   undervalue_assessment:

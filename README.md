@@ -11,8 +11,11 @@
 >
 > 특히 `rules/related_party.yaml` 의 특수관계인 분류는 시행령 제4조 원문과
 > 대조했으나(`status: spec_verified`) **법률 전문가의 검토를 받지 않았다.**
-> 6개 관계 유형 중 3개(`former_spouse`·`affiliate`·`officer`)는 사실 데이터
-> 부족으로 `verify` 로 남아 있다. 실제 사건에 사용해서는 안 된다.
+> `former_spouse`·`affiliate`·`officer` 는 parties.csv 의 구조화 필드
+> (`ownership_percentage`, `officer_of`, `post_divorce_dependency`)가 채워지면
+> related/not_related 로 확정되고, 비어 있으면 사유와 함께 `verify` 로 남는다.
+> `affiliate`/`officer` 의 30% 임계값은 '계열회사'(공정거래법) 정의의 근사치다.
+> 실제 사건에 사용해서는 안 된다.
 
 ---
 
@@ -149,6 +152,9 @@ cases ──< transactions ──< transaction_parties >── parties
 | `relation_type` | 배우자 / 직계비속 / 형제 / 인척 / 계열회사 등 — **사실** |
 | `relation_valid_from`, `relation_valid_to` | **관계는 변한다.** 이혼·퇴임·지분매각 |
 | `relation_basis`, `relation_source` | 증빙 |
+| `ownership_percentage` | `affiliate` 판정용. 30% 이상이면 related(개인·법인 채무자 공통 임계값) |
+| `officer_of` | `officer` 판정용. 임원으로 있는 법인의 `party_id` (자기 자신을 가리키면 채무자 법인의 임원) |
+| `post_divorce_dependency` | `former_spouse` 판정용. 이혼 후에도 채무자 재산으로 생계 유지하는지(Y/N) |
 
 판단 기준일은 파산선고 당시가 아니라 **행위 당시** 다.
 
@@ -205,6 +211,27 @@ D-001,CASE-001,채무자 본인,individual,self,...
 `asset_fair_value` 의 결측은 예외가 아니라 **기본 상태** 다. 결측을 0으로 대체하지
 않으며, 결측 항목은 정렬에서 밀어내지 않고 별도 섹션으로 올린다.
 
+### `transaction_links` (로드맵 4-a)
+
+거래와 거래 사이의 연결도 **사실** 로만 기록한다. "환류로 볼 것인가"는
+`fund_flow_analysis`(rules/art391_4_gratuitous.yaml)가 판단한다 — `parties`와
+`related_party.yaml`의 관계와 동일한 분리다.
+
+| 필드 | 설명 |
+|---|---|
+| `link_id`, `case_id` | `case_id`는 `from`/`to` 거래의 `case_id`와 일치해야 한다 |
+| `from_transaction_id`, `to_transaction_id` | 자금이 흘러나온 거래 → 흘러들어온 거래 |
+| `link_type` | `funds_flow`(구현됨) / `same_asset`(§8) / `contract_bundle`(§8) |
+| `evidence` | 계좌내역 / 등기부 / 진술 |
+| `confidence` | `verified` / `probable` / `alleged` — **`alleged`는 신호로 인정하지 않는다** |
+
+**1-hop만 구현한다.** T001→T005→T021 같은 다단계 연쇄(layering)는 로드맵 4-b.
+검증할 판례나 골든 데이터가 없는 상태에서 다단계를 먼저 만들면 구현이 아니라 추측이다.
+
+**시간 창은 하드 필터가 아니다.** `proximity_window_days`(현재 90일 — 조문 근거
+아님, 경험칙)를 넘는 링크도 배제하지 않고 `funds_flow_delayed` 플래그로 표시만
+한다. `upper_bound.behavior: soft` 와 같은 패턴이다.
+
 ---
 
 ## 5. 현재 범위 (Phase 1)
@@ -218,10 +245,11 @@ D-001,CASE-001,채무자 본인,individual,self,...
 관계 자료만으로 시기적·객관적 요건을 검토할 수 있다.**  다만 유해성 요건과 상당성
 항변은 별도로 존재하므로, 시스템은 요건 충족을 부인 성립으로 표현하지 않는다.
 
-특수관계 판정은 시행령 제4조 원문과 대조를 마쳤으나(`related_party.yaml` `status:
-spec_verified`), `former_spouse`·`affiliate`·`officer` 세 유형은 채무자가 개인이냐
-법인이냐, 지분율이 30%를 넘느냐에 따라 결론이 갈려 `verify` 로 남아 있다. 이 값들은
-거래 데이터가 아니라 채무자 유형·지분 구조 자료로만 확정된다.
+특수관계 판정은 시행령 제4조 원문과 대조를 마쳤고(`related_party.yaml` `status:
+spec_verified`), `former_spouse`·`affiliate`·`officer` 세 유형은 `ownership_percentage`
+· `officer_of` · `post_divorce_dependency`(parties.csv 구조화 필드)가 채워지면 related/
+not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴 `verify` 로 남는다 —
+"구현이 없어서"가 아니라 "이 건의 사실이 아직 없어서"다.
 
 파서를 먼저 만들지 않는 이유는 **디버깅 경계** 때문이다. 판정 엔진이 굳기 전에
 파서를 붙이면 결과가 이상할 때 파싱이 틀린 건지 룰이 틀린 건지 구분할 수 없다.
@@ -235,11 +263,17 @@ spec_verified`), `former_spouse`·`affiliate`·`officer` 세 유형은 채무자
 | 1 | 데이터 모델 정규화 | 완료 |
 | 2 | 룰 명세 (`art391_4`, `related_party`) | 완료 |
 | 3 | 판정 실행기 + 기대값 대조 | 완료 |
-| 4 | 거래 간 관계 링크 (자금 환류 탐지) | |
+| 4-a | 거래 간 링크 — 1-hop 직접 연결 (`funds_circled_back`) | 완료 |
+| 4-b | 거래 간 링크 — 다단계 연쇄 (layering) | |
 | 5 | 판례 기반 테스트 스위트 | |
 | 6 | 지급정지일 민감도 분석 (CLI 노출) | |
 | 7 | 부동산 등기 전자자료 파서 | |
 | 8 | 제1~3호 확장 (입증책임 모델링 포함) | |
+
+**4-a를 먼저 끊고 4-b를 미룬 이유.** 다단계 연쇄 탐지는 검증할 판례나 골든 데이터가 아직
+없다. 검증할 수 없는 걸 먼저 만들면 구현이 아니라 추측이다. 1-hop을 먼저 실제 사례(T021)로
+검증하고, 그 위에 얹는다. `transaction_links` 는 사실(계좌 추적으로 확인된 연결)만 담고,
+"환류로 볼 것인가"는 `fund_flow_analysis`(룰)가 판단한다 — 원칙 2의 반복 적용이다.
 
 8단계에서는 입증책임의 방향이 호마다 다르다는 점이 설계에 들어와야 한다.
 제2호는 수익자의 악의를 관재인이 증명하고, 제3호는 반대로 선의를 상대방이 항변한다.
@@ -345,29 +379,37 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
 관리하여 "기대되는 행위가 없었던 시점"을 역으로 찾아야 하며, 완전히 다른 자료
 구조가 필요하다. Phase 1 범위 밖으로 둔다.
 
-### 행위 유형에 따라 대가비율의 의미가 다르다
+### 행위 유형에 따라 대가비율의 의미가 다르다 (밴드 분리는 완료, 액면 문제는 열려 있음)
 
-현재 `triage_bands` 는 모든 행위에 같은 밴드를 적용한다. 매각에서는 타당하지만
-보증에서는 그렇지 않다.
+샘플의 T103이 이 문제를 드러냈다. 보증채무 300,000,000원에 보증료 12,000,000원을
+실제로 수령한 사안인데, 대가비율 0.04를 매각용 `triage_bands` 에 그대로 넣으면
+`high` 로 분류된다. 그러나 보증료율은 원래 한 자릿수 퍼센트이므로, 이 비율만으로
+무상성을 의심할 수는 없다.
 
-샘플의 T103이 이 문제를 드러낸다. 보증채무 300,000,000원에 보증료 12,000,000원을
-실제로 수령한 사안인데, 대가비율 0.04로 계산되어 `high` 로 분류된다. 그러나
-보증료율은 원래 한 자릿수 퍼센트이므로, 이 비율만으로 무상성을 의심할 수는 없다.
+두 가지가 얽혀 있었다.
 
-두 가지가 얽혀 있다.
-
-1. **액면과 기대가치의 혼동.**  `liability_increase_value` 를 룰에서는 "채무 증가의
+1. **밴드의 단일 적용.**  매각의 대가비율과 보증의 대가비율은 같은 척도가 아니다.
+   → **해결.** `applicable_action_types`(candidate_types 전체에서 `third_party_guarantee`
+   만 제외)로 범위를 나누고, 범위 밖은 `triage_bands` 대신 `signal_count_bands` 로
+   우선순위를 매긴다 — "보증료율이 몇 %면 정상"이라는 근거 없는 숫자를 새로 만드는
+   대신, 이미 있는 다른 신호(`no_consideration`, `role_split_guarantee` 등)의 중첩
+   정도로 판단한다. T103은 이제 신호 1개(`role_split_guarantee`)로 `medium`, 완전
+   무상 보증인 T101·T107(신호 3~4개)은 여전히 `high` — 실질 차이가 드러난다.
+2. **액면과 기대가치의 혼동.**  `liability_increase_value` 를 룰에서는 "채무 증가의
    기대가치"로 정의했으나, 실제로 채워 넣기 쉬운 값은 보증채무 액면이다. 보증인이
    실제로 부담하게 될 금액은 주채무자의 변제 능력에 달려 있어 액면과 크게 다르다.
-2. **밴드의 단일 적용.**  매각의 대가비율과 보증의 대가비율은 같은 척도가 아니다.
-
-해결하려면 `liability_increase_face` / `liability_increase_expected` 로 필드를 쪼개고
-행위 유형별 밴드를 두어야 한다. 스키마 변경을 수반하므로 현재는 열려 있고,
-T103은 불일치를 감춘 채 통과시키지 않고 **`high` 로 기록해 두었다.**
+   → **열려 있음.** `liability_increase_face` / `liability_increase_expected` 로
+   필드를 쪼개는 스키마 변경이 필요하다. `collateral_provision` 도 담보설정액(액면)
+   기준일 수 있어(샘플 T017) 같은 문제를 잠재적으로 안고 있으나, `undervalue_assessment`
+   가 먼저 걸러내(T017은 대가비율 0.8로 3단계에서 제외) 지금은 증상이 드러나지 않는다.
 
 ### 스키마가 아직 표현하지 못하는 것
 
-- 거래 간 연결 (자금 환류) — 로드맵 4단계
+- 거래 간 다단계 연쇄 (layering) — 로드맵 4-b. 1-hop 직접 연결은 `transaction_links` +
+  `fund_flow_analysis` 로 구현됨(§4, §7)
+- 동일 자산의 재귀속 (`same_asset` 링크 타입은 스키마에 있으나 판정 술어 미구현) —
+  부동산은 등기부로, 등록 동산(자동차 등)은 등록 이력으로 추적되지만 그 외 동산은
+  증거 방식이 근본적으로 달라 별도 설계가 필요하다
 - 담보 제공의 성격: 재산 유출이 아니라 **책임재산의 위험 노출**
 - 포기한 채권의 **액면가와 회수가능 가치** 의 구별
 - 보증채무의 **액면과 기대가치** 의 구별 (위 항목과 같은 뿌리)

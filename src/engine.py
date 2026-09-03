@@ -685,6 +685,37 @@ def triage(ratio, rule):
     return "low"
 
 
+def triage_by_signal_count(signal_count, rule):
+    """
+    ratio 기반 triage_bands 가 척도로서 성립하지 않는 행위 유형(예: 보증)에 쓴다.
+    '보증료율이 몇 %면 정상'이라는 근거 없는 숫자 대신, 이미 있는 다른 신호의
+    중첩 정도로 우선순위를 매긴다.
+    """
+    bands = rule["economic_substance"]["ratio"]["signal_count_bands"]
+    for b in bands:
+        if b.get("max") is None or signal_count <= b["max"]:
+            return b["priority"]
+    return "low"
+
+
+def triage_priority(action_type, ratio, signal_count, rule):
+    """
+    action_type 이 applicable_action_types 안이면 비율 기반(triage), 밖이면
+    신호 개수 기반(triage_by_signal_count)으로 우선순위를 매긴다.
+    T103(보증료율 0.04)이 매각과 같은 비율 밴드로 잘못 high 처리되던 문제를 고친다.
+
+    ratio 가 None(value_out 산출 불가 — "평가 필요")인 경우는 행위 유형과 무관하게
+    항상 unresolved 다. 이건 대가비율이 무의미한 행위인지의 문제가 아니라, 애초에
+    비교할 값 자체가 없다는 뜻이기 때문이다.
+    """
+    if ratio is None:
+        return "unresolved"
+    scope = rule["economic_substance"]["ratio"].get("applicable_action_types")
+    if scope is None or action_type in scope:
+        return triage(ratio, rule)
+    return triage_by_signal_count(signal_count, rule)
+
+
 def undervalue_verdict(tx, ratio, rule):
     ua = rule["economic_substance"].get("undervalue_assessment")
     if not ua or tx["action_type"] not in ua["applies_to"]:
@@ -894,13 +925,16 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         # --- 4단계: 정렬 구획 + 신호
         res.reached = "ranking"
         res.candidate = True
-        res.priority = "unresolved" if verdict == "unresolved" else triage(ratio, rule)
         circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule)
         res.flags += ff_flags
         ctx = dict(tx=tx, value_in=vi, value_out=vo, cp_verdicts=cp_v, pd_verdicts=pd_v,
                    counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor,
                    funds_circled_back=circled_back)
         res.signals = [s["id"] for s in rule["priority_signals"] if PREDICATES[s["id"]](ctx)]
+        # 신호를 먼저 계산해야 triage_priority 가 signal_count_bands 를 쓸 수 있다
+        # (applicable_action_types 밖의 행위, 예: 보증).
+        res.priority = ("unresolved" if verdict == "unresolved"
+                         else triage_priority(at, ratio, len(res.signals), rule))
         results.append(res)
 
     return results
