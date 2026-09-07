@@ -153,3 +153,29 @@ def test_report_discloses_debt_repayment_normal_and_excess_parts(capsys):
     assert "채무변제 초과분 산식" in output
     assert "지급 130, 채무 감소 100, 초과 30" in output
     assert "Value In=0은 정상 상환분이 없다는 뜻이 아닙니다" in output
+
+
+def test_report_skips_excess_disclosure_when_no_positive_excess(capsys):
+    """과소변제(excess == 0)는 '초과 0원' 공시로 혼란을 주지 않는다."""
+    ds = SimpleNamespace(transactions=[{
+        "transaction_id": "T1", "transaction_date": "2025-09-05",
+        "action_type": "debt_repayment", "consideration_paid": "80",
+        "liability_reduction": "100", "note": "",
+    }])
+    rules = {"art391-4-gratuitous": {
+        "ranking": {"partitions": [
+            {"id": "unvalued", "label": "평가 필요"},
+            {"id": "valued", "label": "순출연 추정액 순"},
+        ]},
+        "output": {"debt_repayment_excess_disclosure": {
+            "label": "채무변제 초과분 산식",
+            "template": "{tx_id}: 초과 {excess:,.0f}",
+        }},
+    }}
+    result = Result(
+        tx_id="T1", reached="ranking", candidate=True, lookback_months=6,
+        priority="unresolved", value_out=0.0, value_in=0.0, ratio=None,
+        flags=["debt_repayment_excess_isolated"],
+    )
+    cli.report(ds, rules, [result])
+    assert "채무변제 초과분 산식" not in capsys.readouterr().out

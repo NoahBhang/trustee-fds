@@ -7,9 +7,9 @@ import sys
 from pathlib import Path
 
 if __package__:
-    from .engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
+    from .engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity, _num
 else:  # 직접 실행(`python src/cli.py`) 호환
-    from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
+    from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity, _num
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -143,16 +143,20 @@ def report(ds, rules, results):
         print(f"  {r.tx_id:7}{r.priority:11}{r.value_out - r.value_in:>18,.0f}"
               f"{ratio:>10}  {r.lookback_months:>2}월  {len(r.signals)}")
 
+    # 초과분이 양수인 과다변제만 공시한다. 과소변제(excess == 0)는 이 산식이
+    # "초과 0원"으로 찍혀 오히려 혼란스럽다 — 별도 신호로 이미 드러난다.
     repayment_results = [
         (r, next(t for t in ds.transactions if t["transaction_id"] == r.tx_id))
-        for r in valued if "debt_repayment_excess_isolated" in r.flags
+        for r in valued
+        if "debt_repayment_excess_isolated" in r.flags
+        and (r.value_out - r.value_in) > 0
     ]
     if repayment_results:
         disclosure = rule["output"]["debt_repayment_excess_disclosure"]
         print(f"\n【{disclosure['label']}】")
         for r, tx in repayment_results:
-            paid = float(tx["consideration_paid"])
-            reduced = float(tx["liability_reduction"])
+            paid = _num(tx.get("consideration_paid")) or 0.0
+            reduced = _num(tx.get("liability_reduction")) or 0.0
             print("  " + disclosure["template"].format(
                 tx_id=r.tx_id, paid=paid, reduced=reduced,
                 excess=r.value_out - r.value_in,
