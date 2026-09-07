@@ -490,6 +490,28 @@ def test_same_day_multi_node_cycle_is_critical():
     assert issues[0].severity == IssueSeverity.CRITICAL
 
 
+def test_all_disjoint_cycle_components_are_reported():
+    txs = [
+        {"transaction_id": tx_id, "case_id": "C", "transaction_date": "2025-01-01"}
+        for tx_id in ("A", "B", "C", "D")
+    ]
+    links = [
+        {"link_id": "L1", "case_id": "C", "from_transaction_id": "A",
+         "to_transaction_id": "B", "link_type": "funds_flow"},
+        {"link_id": "L2", "case_id": "C", "from_transaction_id": "B",
+         "to_transaction_id": "A", "link_type": "funds_flow"},
+        {"link_id": "L3", "case_id": "C", "from_transaction_id": "C",
+         "to_transaction_id": "D", "link_type": "funds_flow"},
+        {"link_id": "L4", "case_id": "C", "from_transaction_id": "D",
+         "to_transaction_id": "C", "link_type": "funds_flow"},
+    ]
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
+    issue = ds._check_tx_link_cycles()[0]
+    assert len(issue.details) == 2
+    assert {tuple(item["transactions"]) for item in issue.details} == {
+        ("A", "B"), ("C", "D")}
+
+
 def test_duplicate_transaction_link_id_and_edge_are_reported():
     links = [
         {"link_id": "L1", "case_id": "C", "from_transaction_id": "A",

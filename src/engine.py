@@ -753,7 +753,7 @@ class Dataset:
         return issues
 
     def _check_tx_link_cycles(self) -> list[IntegrityIssue]:
-        """같은 날짜에는 시간 역행 검사로 잡히지 않는 다중 노드 순환을 검출한다."""
+        """같은 날짜에는 시간 역행 검사로 잡히지 않는 모든 순환 구성요소를 검출한다."""
         tx_ids = {t["transaction_id"] for t in self.transactions}
         by_case = {}
         for link in self.tx_links:
@@ -764,37 +764,51 @@ class Dataset:
 
         cycles = []
         for case_id, graph in sorted(by_case.items()):
-            state, stack, stack_index = {}, [], {}
+            # Tarjan SCC: 순환에 속하는 노드 집합을 빠짐없이 한 번씩 보고한다.
+            # 한 SCC 안에 단순 순환이 여러 개 있어도 하나의 수정 단위로 제시한다.
+            index = 0
+            indices, lowlinks = {}, {}
+            stack, on_stack = [], set()
 
-            def visit(node):
-                state[node] = 1
-                stack_index[node] = len(stack)
+            def strongconnect(node):
+                nonlocal index
+                indices[node] = lowlinks[node] = index
+                index += 1
                 stack.append(node)
-                for nxt in sorted(graph.get(node, ())):
-                    if state.get(nxt, 0) == 0:
-                        if visit(nxt):
-                            return True
-                    elif state.get(nxt) == 1:
-                        start = stack_index[nxt]
-                        cycles.append({"case_id": case_id,
-                                       "cycle": stack[start:] + [nxt]})
-                        return True
-                stack.pop()
-                stack_index.pop(node, None)
-                state[node] = 2
-                return False
+                on_stack.add(node)
 
-            for node in sorted(set(graph) | {n for tos in graph.values() for n in tos}):
-                if state.get(node, 0) == 0 and visit(node):
-                    break
+                for nxt in sorted(graph.get(node, ())):
+                    if nxt not in indices:
+                        strongconnect(nxt)
+                        lowlinks[node] = min(lowlinks[node], lowlinks[nxt])
+                    elif nxt in on_stack:
+                        lowlinks[node] = min(lowlinks[node], indices[nxt])
+
+                if lowlinks[node] != indices[node]:
+                    return
+                component = []
+                while True:
+                    member = stack.pop()
+                    on_stack.remove(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                if len(component) > 1:
+                    cycles.append({"case_id": case_id,
+                                   "transactions": sorted(component)})
+
+            nodes = set(graph) | {n for tos in graph.values() for n in tos}
+            for node in sorted(nodes):
+                if node not in indices:
+                    strongconnect(node)
 
         if not cycles:
             return []
         return [IntegrityIssue(
             category=IssueCategory.REFERENTIAL,
             severity=IssueSeverity.CRITICAL,
-            message="transaction_links 에 순환 경로 존재 — 자금 흐름 DAG 위반",
-            details=cycles,
+            message="transaction_links 에 순환 구성요소 존재 — 자금 흐름 DAG 위반",
+            details=sorted(cycles, key=lambda item: (item["case_id"], item["transactions"])),
         )]
 
 

@@ -38,6 +38,25 @@ def report_rule_status(rules):
     print("  production 승인 전에는 실제 사건의 법률판단에 사용하지 말 것.\n")
 
 
+def report_provisional_anchors(ds):
+    """미확정 지급정지일을 잠정 기준점으로 쓰는 사실을 결과보다 먼저 알린다."""
+    provisional = [
+        case for case in ds.cases.values()
+        if (case.get("suspension_of_payment_date") or "").strip()
+        and (case.get("suspension_date_confirmed") or "").strip() != "Y"
+    ]
+    if not provisional:
+        return
+    print("=" * 74)
+    print("⚠ 미확정 지급정지일을 잠정 기준점으로 사용")
+    print("=" * 74)
+    for case in sorted(provisional, key=lambda row: row["case_id"]):
+        print(f"  • {case['case_id']}: {case['suspension_of_payment_date']} "
+              f"(confirmed={case.get('suspension_date_confirmed') or 'blank'})")
+    print("  후보 누락을 줄이기 위해 시간 창과 post_anchor 신호에 포함한 잠정값이다.")
+    print("  지급정지일을 제외·변경한 민감도 시나리오를 함께 확인할 것.\n")
+
+
 # ------------------------------------------------------------------ 무결성 검사 리포트
 
 def report_integrity(ds):
@@ -123,6 +142,21 @@ def report(ds, rules, results):
         ratio = "     -" if r.ratio is None else f"{r.ratio:6.4f}"
         print(f"  {r.tx_id:7}{r.priority:11}{r.value_out - r.value_in:>18,.0f}"
               f"{ratio:>10}  {r.lookback_months:>2}월  {len(r.signals)}")
+
+    repayment_results = [
+        (r, next(t for t in ds.transactions if t["transaction_id"] == r.tx_id))
+        for r in valued if "debt_repayment_excess_isolated" in r.flags
+    ]
+    if repayment_results:
+        disclosure = rule["output"]["debt_repayment_excess_disclosure"]
+        print(f"\n【{disclosure['label']}】")
+        for r, tx in repayment_results:
+            paid = float(tx["consideration_paid"])
+            reduced = float(tx["liability_reduction"])
+            print("  " + disclosure["template"].format(
+                tx_id=r.tx_id, paid=paid, reduced=reduced,
+                excess=r.value_out - r.value_in,
+            ))
 
     total = sum(r.value_out - r.value_in for r in valued)
     print(f"\n  순출연 추정액 합계(평가 완료분만): {total:,.0f}원")
@@ -250,6 +284,7 @@ def main():
     report_rule_status(rules)
     unilateral = rules["art391-4-gratuitous"]["action_filter"].get("unilateral_acts", [])
     ds = Dataset.load(ROOT, unilateral_acts=unilateral)
+    report_provisional_anchors(ds)
 
     # 무결성 검사 결과 출력 (리포트 앞에)
     report_integrity(ds)
@@ -269,11 +304,9 @@ def main():
     # 기대값 대조
     m, u = validate(results)
 
-    # 종료 코드는 비트마스크다: bit0(1)=기대값 불일치, bit1(2)=CRITICAL 무결성 문제.
-    # 예전에는 CRITICAL 이 있어도 exit 0 이었다 — "리포트에는 나오지만 자동화는
-    # 통과로 본다"는 fail-open 이 법률 조사 도구에는 맞지 않는다(코덱스 리뷰).
-    # 다만 원인 구분(§7)은 유지해야 하므로 1로 뭉개지 않고 비트를 분리한다 —
-    # CI 는 `code & 1`(골든파일) 과 `code & 2`(무결성) 를 따로 검사할 수 있다.
+    # 종료 코드는 상호 배타적이다. CRITICAL 입력은 위에서 validate() 전에 2로
+    # 끝나며, 여기까지 온 실행에서 골든 불일치·target_stage 미도달은 1이다.
+    # 0=정상, 1=회귀 대조 실패, 2=입력 무결성 실패.
     return 1 if (m or u) else 0
 
 
