@@ -2,16 +2,16 @@
 # 무상부인 검토 규칙 — 채무자회생법 제391조 제4호
 # =============================================================================
 # 이 파일은 "법률 판단"이 아니라 "조사 대상 선별 기준"을 기술한다.
-# 실행기(engine)는 이 파일을 해석만 하며, 판정 로직을 코드에 하드코딩하지 않는다.
-# 법령 개정 시 이 파일만 수정한다.
+# 실행기(engine)는 이 파일의 값과 술어 id를 읽는다. 법령 개정으로 술어의 의미가
+# 바뀌면 YAML, 대응 파이썬 predicate, 테스트를 함께 수정해야 한다.
 #
 # 검토자 확인란: [ ] 법률 전문가 검토 완료 (검토일: ____ / 검토자: ____)
 # =============================================================================
 
 rule_id: art391-4-gratuitous
-version: 0.1.0
+version: 0.2.0
 status: draft                    # draft | spec_verified | legal_reviewed | production
-last_updated: 2026-09-02
+last_updated: 2026-09-08
 
 # 이 룰은 특수관계인 분류 결과를 입력으로 받는다.
 depends_on:
@@ -114,6 +114,7 @@ action_filter:
     - collateral_provision          # 담보 설정 — 교환적 대가 여부는 3단계 판정
     - litigation_concession         # 청구의 포기·인낙, 재판상 화해, 소취하 등
     - inheritance_partition_waiver  # 상속재산분할협의상 지분 포기
+    - debt_repayment                # 정상 변제는 route_out, 초과분만 3단계에서 검토
 
   # 다른 조문으로 라우팅. 조용히 버리지 않고 사유를 남긴다.
   route_out:
@@ -128,7 +129,8 @@ action_filter:
         [구현 검증됨] 이 조건은 engine.py 의 _debt_repayment_within_tolerance() 가
         consideration_paid(실지급액) 와 liability_reduction(실제 채무 감소액)을
         비교해 실행한다 — 과거에는 action_type 문자열만 매칭해 항상 라우팅됐다
-        (T027 로 재현·수정, 34건 중 이 케이스만 target_stage=action).
+        (T027 로 재현·수정). T027은 이제 초과분 계산을 검증하기 위해
+        target_stage=economic까지 도달한다.
     - when: action_type == "inheritance_renunciation"
       to: excluded
       reason: "상속포기는 인적 결단의 성격. 일반적으로 재산권을 목적으로 한 행위로 보지 않음."
@@ -168,14 +170,9 @@ economic_substance:
   value_in:
     components:
       - verified_cash_received      # 실제 입금이 확인된 대가 — economics()의 cash
-      - verified_debt_reduction     # 확인된 채무 감소 — [미구현] economics()는 이 항목을
-                                     # 계산하지 않는다. debt_repayment 가 candidate_types
-                                     # 에 없어 economics() 자체에 도달하지 못하므로 지금은
-                                     # 증상이 드러나지 않지만, sale 등 다른 행위 유형에서
-                                     # 대가가 채무 감면으로 주어지는 경우까지 포함해 스키마
-                                     # 설계가 필요하다. README §8 "과다변제 초과분의 경제적
-                                     # 실질은 아직 계산하지 않는다" 참조 — 여기서 구현하지
-                                     # 않는다.
+      - verified_debt_reduction     # 확인된 채무 감소 — transactions.liability_reduction
+                                     # 값을 economics()가 Value In에 산입한다. 채무 변제는
+                                     # 지급액-채무감소액의 초과분만 별도 Value Out으로 계산.
       - realizable_direct_benefit   # 채무자에게 직접 귀속된 실현 가능한 이익 — economics()의 benefit
     excluded_from_value_in:         # 판례상 '직접적·현실적 이익'으로 보기 어려운 것
       - "그룹 전체의 존속 기대"
@@ -202,7 +199,8 @@ economic_substance:
       - { max: null, priority: low }
     applicable_action_types: [gift, debt_forgiveness, right_waiver, prescription_benefit_waiver,
                                gratuitous_loan_for_use, third_party_collateral, sale,
-                               collateral_provision, litigation_concession, inheritance_partition_waiver]
+                               collateral_provision, litigation_concession, inheritance_partition_waiver,
+                               debt_repayment]
     # candidate_types 전체에서 third_party_guarantee 만 뺀 목록이다 — 위 triage_bands 는
     # "출연 대비 대가의 비율"을 재는 척도라, value_out 이 재산 자체의 가치(asset_fair_value
     # /waived_right_value)일 때는 타당하다. third_party_guarantee 는 value_out 이 거의
@@ -214,7 +212,7 @@ economic_substance:
     # 증상이 드러나지 않는다 — README §8 '액면과 기대가치의 구별'에 열어둔다.
     # applicable_action_types 밖의 행위는 triage_bands 대신 signal_count_bands 로
     # 우선순위를 매긴다 — "보증료율이 몇 %면 정상"이라는 근거 없는 숫자를 새로
-    # 만드는 대신, 이미 있는 다른 신호(no_consideration, role_split_guarantee 등)의
+    # 만드는 대신, 이미 있는 다른 신호(no_verified_consideration, role_split_guarantee 등)의
     # 중첩 정도로 판단한다.
     signal_count_bands:              # 내부 운영값. 조문 근거 없음.
       - { max: 0, priority: low }
@@ -249,7 +247,8 @@ economic_substance:
 # 자금 흐름 분석 (로드맵 4 — 1-hop 직접 연결 + 다단계 연쇄 max_hops 까지)
 # -----------------------------------------------------------------------------
 # transaction_links 는 사실(계좌 추적으로 확인된 거래 간 연결)만 담는다.
-# "환류로 볼 것인가"는 판단이므로 아래 설정에 따라 이 룰이 판정한다.
+# 아래 설정은 특수관계인 상대 거래로 이어진 연결을 조사 신호로 만들 뿐,
+# 추적 금액·계좌 명의 없이 동일 자금의 환류를 확정하지 않는다.
 #
 # 4-a(1-hop)를 실제 사례(T001→T021)로 먼저 검증한 뒤, 그 위에 4-b(다단계
 # 연쇄, T025 대조군)를 얹었다. 각 홉에 min_confidence·proximity_window_days 를
@@ -276,14 +275,15 @@ fund_flow_analysis:
   max_hops: 3
   # 은닉은 한 번에 끝나지 않는다. T001(배우자에게 매각) → T021(조카 계좌 경유) →
   # T025(배우자에게 최종 귀속) 같은 체인은 각 홉만 보면 평범해 보이지만 전체를
-  # 이으면 환류다. max_hops 는 탐색 깊이 상한 — 조문 근거 없는 운영값이다.
+  # 이으면 추가 조사할 자금흐름 연쇄가 된다. max_hops 는 탐색 깊이 상한 — 조문
+  # 근거 없는 운영값이다.
   # 깊이가 깊어질수록 우연한 연결이 섞일 확률이 커지므로 무제한 추적하지 않는다.
   #
   # 약한 고리 원칙: 체인의 각 홉마다 min_confidence 와 proximity_window_days 를
   # 독립적으로 적용한다. 한 홉이라도 confidence 미달이면 그 경로는 신호로 세우지
   # 않고, 한 홉이라도 시간창을 넘으면 경로 전체를 outside_window_flag 로 표시한다.
   # 사슬의 강도는 가장 약한 고리를 넘지 못한다.
-  multi_hop_flag: funds_circled_back_multihop
+  multi_hop_flag: related_party_fund_flow_multihop
   # 2홉 이상으로 잡힌 경우 표시한다. 직접 연결(1홉)과 증거 강도가 다르므로
   # 관재인이 구별할 수 있어야 한다 — 시스템이 대신 판단하지 않고 근거만 준다.
   cycle_policy: skip_visited
@@ -295,9 +295,9 @@ fund_flow_analysis:
 # -----------------------------------------------------------------------------
 # 점수는 부인 성립 확률도, 승소 확률도 아니다. 독립 신호의 중첩 정도일 뿐이다.
 priority_signals:
-  - id: no_consideration
-    when: "value_in == 0"
-    label: "대가 없음"
+  - id: no_verified_consideration
+    when: "value_in == 0 and consideration_contractual == 0"
+    label: "확인된 대가 없음"
   - id: payment_unverified
     when: "consideration_contractual > 0 and payment_verified == false"
     label: "계약서상 대가는 있으나 실제 지급 미확인"
@@ -310,15 +310,21 @@ priority_signals:
   - id: related_principal_debtor
     when: 'related_party.verdict_for(role="principal_debtor") == "related"'
     label: "주채무자가 특수관계인 — 조사 신호일 뿐 소급기간을 바꾸지 않음"
-  - id: funds_circled_back
+  - id: related_party_fund_flow
     when: >
       이 거래의 legal_counterparty 가 특수관계인(related)이고, transaction_links 에
       이 거래를 to_transaction_id 로 하는 funds_flow 링크가 있고, confidence >=
       fund_flow_analysis.min_confidence 이며, from 거래일과의 간격이
       proximity_window_days 이내(다단계 연쇄는 각 홉 독립 적용, engine.py
-      evaluate_funds_circled_back 참조). 상대방 특수관계 여부를 게이팅하지 않으면
+      evaluate_related_party_fund_flow 참조). 상대방 특수관계 여부를 게이팅하지 않으면
       무관한 제3자 간 funds_flow 링크에도 "관계인에게 환류" 라벨이 붙는다.
-    label: "거래 직후 자금이 관계인에게 환류"
+    label: "특수관계인 상대 거래로 이어지는 자금흐름 연결"
+    note: >
+      링크는 환류의 단서이지 동일 자금의 재귀속을 확정하는 증거가 아니다. 추적 금액과
+      계좌 명의가 없는 현재 스키마에서는 출력문에 '환류 확인'으로 표현하지 않는다.
+  - id: debt_repayment_excess
+    when: "action_type == debt_repayment and consideration_paid > liability_reduction"
+    label: "실제 채무 감소액을 초과한 변제"
   - id: non_cash_waiver
     when: "right_waiver_type != null"
     label: "비현금 권리의 포기"
@@ -344,19 +350,19 @@ priority_signals:
 # 액수가 크고 은닉 목적이 뚜렷할 가능성이 있다.
 # 결측을 0으로 대체해 정렬하면 가장 위험한 항목이 목록 맨 아래로 사라진다.
 ranking:
-  expected_recovery_formula: "value_out - value_in"
+  net_value_gap_formula: "value_out - value_in"
   partitions:
     - id: unvalued
       when: "value_out is undefined"
-      label: "회수 기대액 미상 — 평가 필요"
+      label: "순출연 추정액 미상 — 평가 필요"
       placement: above          # 정렬 목록보다 위에 별도 섹션으로 표시
       sort: ["signal_count desc", "transaction_date desc"]
       note: "금액으로 줄을 세울 수 없으므로 신호 중첩 수와 최근성으로 정렬한다."
     - id: valued
       when: "value_out is defined"
-      label: "회수 기대액 순"
+      label: "순출연 추정액 순"
       placement: below
-      sort: ["expected_recovery desc"]
+      sort: ["net_value_gap desc"]
   forbidden:
     - "value_out 결측을 0으로 대체하여 정렬하는 것"
     - "결측 항목을 목록 하단으로 밀거나 출력에서 생략하는 것"
@@ -399,7 +405,7 @@ output:
     - "부인 가능성 87%"
     - "승소 확률"
   required_elements:
-    - "'회수 기대액 미상' 섹션을 정렬 목록보다 먼저 출력"
+    - "'순출연 추정액 미상' 섹션을 정렬 목록보다 먼저 출력"
     - 확인된 사실과 미확인 사실의 구별
     - 적용 조문 및 판례 근거
     - 수치의 산식과 출처
@@ -414,7 +420,7 @@ output:
     · 출연 가치(Value Out): {value_out} ({value_out_basis})
     · 확인된 대가(Value In): {value_in} ({value_in_basis})
     · 대가비율: {ratio} — 조사 우선순위 지표이며 법정 기준이 아닙니다.
-    · 회수 기대액(참고): {expected_recovery}
+    · 순출연 추정액(참고): {net_value_gap}
 
     적용 검토 조문: 채무자회생법 제391조 제4호{related_clause}
     소급기간 {lookback_months}개월 적용 근거: {lookback_basis}
@@ -428,7 +434,7 @@ output:
     아닙니다. 최종 판단은 파산관재인에게 있습니다.
 
   unvalued_template: |
-    [회수 기대액 미상 — 평가 필요]
+    [순출연 추정액 미상 — 평가 필요]
 
     {anchor_label}({anchor_date}) 기준 {days}일 {direction}에 이루어진 {action_type_ko}입니다.
     상대방: {counterparty}{related_suffix}
@@ -438,7 +444,7 @@ output:
     · 대가비율: 산출 불가
 
     이 항목은 금액이 작아서가 아니라 평가 자료가 없어 정렬에서 제외되었습니다.
-    회수 기대액을 0으로 보아서는 안 됩니다.
+    순출연 추정액을 0으로 보아서는 안 됩니다.
 
     ⚠ 우선 확인
     · 출연재산의 가액 평가 (감정 · 시세 · 거래사례 중 가능한 방법)

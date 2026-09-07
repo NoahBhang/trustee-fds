@@ -4,7 +4,7 @@ trustee-fds 판정 실행기
 설계 원칙
 ---------
 1. 조문에서 나오는 값(소급기간, 기준 사건, 행위 유형, 임계값, 정렬 구획)은
-   전부 YAML에서 읽는다. 코드에 숫자를 박지 않는다.
+   전부 YAML에서 읽는다. 필수 설정이 없으면 코드 기본값으로 대체하지 않고 실패한다.
 
 2. 술어(predicate)는 id 로 등록한다. YAML 의 `when` 문자열은 사람이 읽는
    명세이고, 실행은 같은 id 로 등록된 파이썬 함수가 한다.
@@ -21,6 +21,7 @@ trustee-fds 판정 실행기
 from __future__ import annotations
 
 import csv
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
@@ -53,6 +54,9 @@ class IssueSeverity(Enum):
     INFO = 3          # 진단 개선
 
 
+VALID_RULE_STATUSES = {"draft", "spec_verified", "legal_reviewed", "production"}
+
+
 @dataclass
 class IntegrityIssue:
     """무결성 검사 결과."""
@@ -75,7 +79,8 @@ def _date(s):
 def _num(s):
     s = (s or "").strip()
     try:
-        return float(s) if s else None
+        value = float(s) if s else None
+        return value if value is None or math.isfinite(value) else None
     except ValueError:
         return None
 
@@ -167,6 +172,7 @@ class Dataset:
         여기 대응 검사도 함께 추가해야 한다.
         """
         issues = []
+        issues += self._check_value_formats()
         issues += self._check_party_id_references()
         issues += self._check_legal_counterparty_coverage()
         issues += self._check_case_id_cross_validation()
@@ -178,7 +184,126 @@ class Dataset:
         issues += self._check_tx_link_references()
         issues += self._check_tx_link_temporal_order()
         issues += self._check_tx_link_self_reference()
+        issues += self._check_tx_link_cycles()
         return issues
+
+    def _check_value_formats(self) -> list[IntegrityIssue]:
+        """판정에 쓰는 날짜·숫자·열거값이 조용히 결측값으로 바뀌지 않게 한다."""
+        invalid = []
+
+        def add(table, row_id, field_name, value, reason):
+            invalid.append({
+                "table": table,
+                "row_id": row_id,
+                "field": field_name,
+                "value": value,
+                "reason": reason,
+            })
+
+        def check_dates(table, rows, id_field, fields, required=()):
+            for row in rows:
+                row_id = row.get(id_field, "")
+                for field_name in fields:
+                    raw = (row.get(field_name) or "").strip()
+                    if not raw:
+                        if field_name in required:
+                            add(table, row_id, field_name, raw, "필수 날짜 누락")
+                        continue
+                    if _date(raw) is None:
+                        add(table, row_id, field_name, raw, "YYYY-MM-DD 날짜 형식 아님")
+
+        def check_numbers(table, rows, id_field, fields, ranges=None):
+            ranges = ranges or {}
+            for row in rows:
+                row_id = row.get(id_field, "")
+                for field_name in fields:
+                    raw = (row.get(field_name) or "").strip()
+                    if not raw:
+                        continue
+                    value = _num(raw)
+                    if value is None:
+                        add(table, row_id, field_name, raw, "숫자 형식 아님")
+                        continue
+                    low, high = ranges.get(field_name, (0, None))
+                    if low is not None and value < low:
+                        add(table, row_id, field_name, raw, f"최솟값 {low} 미만")
+                    if high is not None and value > high:
+                        add(table, row_id, field_name, raw, f"최댓값 {high} 초과")
+
+        def check_enum(table, rows, id_field, field_name, allowed, allow_blank=False):
+            for row in rows:
+                row_id = row.get(id_field, "")
+                raw = (row.get(field_name) or "").strip()
+                if not raw and allow_blank:
+                    continue
+                if raw not in allowed:
+                    add(table, row_id, field_name, raw,
+                        "허용값: " + ", ".join(sorted(allowed)))
+
+        check_dates("cases", self._raw_cases, "case_id",
+                    ("petition_date", "suspension_of_payment_date", "adjudication_date"),
+                    required=("petition_date",))
+        check_dates("transactions", self.transactions, "transaction_id",
+                    ("transaction_date",), required=("transaction_date",))
+        check_dates("parties", self._raw_parties, "party_id",
+                    ("relation_valid_from", "relation_valid_to"))
+
+        money_fields = (
+            "asset_fair_value", "liability_increase_value", "liability_reduction",
+            "waived_right_value", "consideration_contractual", "consideration_paid",
+            "debtor_direct_benefit_value",
+        )
+        check_numbers("transactions", self.transactions, "transaction_id", money_fields)
+        check_numbers(
+            "parties", self._raw_parties, "party_id",
+            ("ownership_percentage", "aggregated_ownership_percentage", "kinship_degree"),
+            ranges={
+                "ownership_percentage": (0, 100),
+                "aggregated_ownership_percentage": (0, 100),
+                "kinship_degree": (1, None),
+            },
+        )
+        check_numbers(
+            "transaction_parties", self.links, "transaction_id",
+            ("share_ratio", "share_amount"),
+            ranges={"share_ratio": (0, 1), "share_amount": (0, None)},
+        )
+
+        check_enum("cases", self._raw_cases, "case_id", "debtor_type",
+                   {"individual", "corporation"})
+        check_enum("transactions", self.transactions, "transaction_id", "payment_verified",
+                   {"Y", "N"}, allow_blank=True)
+        check_enum("transactions", self.transactions, "transaction_id", "benefit_realizability",
+                   {"realized", "expected", "unrealized"}, allow_blank=True)
+        check_enum("cases", self._raw_cases, "case_id", "suspension_date_confirmed",
+                   {"Y", "N"}, allow_blank=True)
+        for fact_field in (
+            "post_divorce_dependency", "financial_dependency", "shared_livelihood",
+            "de_facto_control", "affiliate_status_verified",
+        ):
+            check_enum("parties", self._raw_parties, "party_id", fact_field,
+                       {"Y", "N"}, allow_blank=True)
+        check_enum("transaction_parties", self.links, "transaction_id", "role",
+                   {"legal_counterparty", "principal_debtor", "ultimate_beneficiary"})
+        check_enum("transaction_links", self.tx_links, "link_id", "link_type",
+                   {"funds_flow", "same_asset", "contract_bundle"})
+        check_enum("transaction_links", self.tx_links, "link_id", "confidence",
+                   {"verified", "probable", "alleged"})
+        for link in self.tx_links:
+            if (link.get("link_type") == "funds_flow"
+                    and link.get("confidence") in {"verified", "probable"}
+                    and not (link.get("evidence") or "").strip()):
+                add("transaction_links", link.get("link_id", ""), "evidence", "",
+                    "probable 이상 자금흐름 링크의 근거 누락")
+
+        if not invalid:
+            return []
+        return [IntegrityIssue(
+            category=IssueCategory.VALUE_CONSTRAINT,
+            severity=IssueSeverity.CRITICAL,
+            message="판정 입력의 날짜·숫자·열거값 형식 오류 — 결측으로 간주하지 않음",
+            details=invalid,
+        )]
 
     def _check_party_id_references(self) -> list[IntegrityIssue]:
         """
@@ -389,6 +514,33 @@ class Dataset:
                          for t, p, r in link_dups],
             ))
 
+        tx_link_id_dups = _dups(self.tx_links, lambda r: r["link_id"])
+        if tx_link_id_dups:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="transaction_links.csv 에 중복된 link_id",
+                details=[{"link_id": link_id} for link_id in tx_link_id_dups],
+            ))
+
+        tx_link_edge_dups = _dups(
+            self.tx_links,
+            lambda r: (r["case_id"], r["from_transaction_id"],
+                       r["to_transaction_id"], r["link_type"]),
+        )
+        if tx_link_edge_dups:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.WARNING,
+                message="transaction_links.csv 에 중복된 거래 간 링크",
+                details=[{
+                    "case_id": case_id,
+                    "from_transaction_id": from_id,
+                    "to_transaction_id": to_id,
+                    "link_type": link_type,
+                } for case_id, from_id, to_id, link_type in tx_link_edge_dups],
+            ))
+
         return issues
 
     def _check_case_id_coverage(self) -> list[IntegrityIssue]:
@@ -410,7 +562,7 @@ class Dataset:
         if missing_cases:
             issues.append(IntegrityIssue(
                 category=IssueCategory.REFERENTIAL,
-                severity=IssueSeverity.INFO,
+                severity=IssueSeverity.CRITICAL,
                 message="존재하지 않는 사건을 참조하는 거래들",
                 details=missing_cases
             ))
@@ -600,11 +752,63 @@ class Dataset:
             ))
         return issues
 
+    def _check_tx_link_cycles(self) -> list[IntegrityIssue]:
+        """같은 날짜에는 시간 역행 검사로 잡히지 않는 다중 노드 순환을 검출한다."""
+        tx_ids = {t["transaction_id"] for t in self.transactions}
+        by_case = {}
+        for link in self.tx_links:
+            from_id, to_id = link["from_transaction_id"], link["to_transaction_id"]
+            if from_id not in tx_ids or to_id not in tx_ids or from_id == to_id:
+                continue
+            by_case.setdefault(link["case_id"], {}).setdefault(from_id, set()).add(to_id)
+
+        cycles = []
+        for case_id, graph in sorted(by_case.items()):
+            state, stack, stack_index = {}, [], {}
+
+            def visit(node):
+                state[node] = 1
+                stack_index[node] = len(stack)
+                stack.append(node)
+                for nxt in sorted(graph.get(node, ())):
+                    if state.get(nxt, 0) == 0:
+                        if visit(nxt):
+                            return True
+                    elif state.get(nxt) == 1:
+                        start = stack_index[nxt]
+                        cycles.append({"case_id": case_id,
+                                       "cycle": stack[start:] + [nxt]})
+                        return True
+                stack.pop()
+                stack_index.pop(node, None)
+                state[node] = 2
+                return False
+
+            for node in sorted(set(graph) | {n for tos in graph.values() for n in tos}):
+                if state.get(node, 0) == 0 and visit(node):
+                    break
+
+        if not cycles:
+            return []
+        return [IntegrityIssue(
+            category=IssueCategory.REFERENTIAL,
+            severity=IssueSeverity.CRITICAL,
+            message="transaction_links 에 순환 경로 존재 — 자금 흐름 DAG 위반",
+            details=cycles,
+        )]
+
 
 def load_rules(root: Path):
     rules = {}
     for p in (root / "rules").glob("*.yaml"):
         r = yaml.safe_load(p.read_text(encoding="utf-8"))
+        for required in ("rule_id", "version", "status"):
+            if required not in r:
+                raise ValueError(f"{p.name}: 필수 룰 메타데이터 누락 — {required}")
+        if r["status"] not in VALID_RULE_STATUSES:
+            raise ValueError(f"{p.name}: 알 수 없는 status — {r['status']}")
+        if r["rule_id"] in rules:
+            raise ValueError(f"중복 rule_id — {r['rule_id']}")
         rules[r["rule_id"]] = r
     main = rules["art391-4-gratuitous"]
     for dep in main.get("depends_on", []):
@@ -617,7 +821,7 @@ def load_rules(root: Path):
 
 def _boundary_window_days(rp_rules):
     """관계 종료일 전후 relation_boundary 플래그를 붙일 폭(일). related_party.yaml."""
-    return rp_rules.get("temporal_scope", {}).get("boundary_window_days", 30)
+    return rp_rules["temporal_scope"]["boundary_window_days"]
 
 
 def _apply_temporal_window(verdict, flags, party, tx_date, rp_rules):
@@ -641,17 +845,63 @@ def _apply_temporal_window(verdict, flags, party, tx_date, rp_rules):
     return verdict, flags
 
 
-def _classify_affiliate(party, rp_rules):
+def _fact_yes_no(party, field_name):
+    """Y/N 구조화 사실을 True/False/None으로 읽는다."""
+    raw = (party.get(field_name) or "").strip().upper()
+    if raw == "Y":
+        return True
+    if raw == "N":
+        return False
+    return None
+
+
+def _classify_kinship(party, limit):
+    """촌수 한계를 데이터로 확인한다. 값이 없으면 related로 추정하지 않는다."""
+    degree = _num(party.get("kinship_degree"))
+    if degree is None:
+        return "verify", ["kinship_degree_unknown"]
+    if degree <= limit:
+        return "related", []
+    return "not_related", ["kinship_degree_outside_statutory_limit"]
+
+
+def _classify_employee(party):
+    """직원 신분이 아니라 생계 의존·공동생계 사실로 시행령 요건을 판정한다."""
+    dependent = _fact_yes_no(party, "financial_dependency")
+    shared = _fact_yes_no(party, "shared_livelihood")
+    if dependent is True or shared is True:
+        return "related", ["livelihood_relationship_confirmed"]
+    if dependent is False and shared is False:
+        return "not_related", []
+    return "verify", ["livelihood_relationship_unknown"]
+
+
+def _classify_affiliate(party, rp_rules, debtor_type=None):
     """
     지분율 기준 동적 판정. ownership_test.threshold_percent 이상이면 related.
     미상이면 verify(사실 데이터 부재), 미달이면 verify(사실상 영향력 배제 못 함) —
     임계값 미달을 not_related 로 자동 확정하지 않는다.
     """
-    ot = rp_rules.get("ownership_test", {})
-    threshold = ot.get("threshold_percent", 30)
-    pct = _num(party.get("ownership_percentage"))
-    if pct is None:
-        return "verify", ["ownership_percentage_unknown"]
+    # 법인 채무자의 '계열회사'는 공정거래법상 계열회사 해당 사실로 확인한다.
+    # 단순 지분 30%를 정의의 대용물로 쓰지 않는다.
+    if debtor_type == "corporation":
+        verified = _fact_yes_no(party, "affiliate_status_verified")
+        if verified is True:
+            return "related", ["affiliate_status_confirmed"]
+        if verified is False:
+            return "not_related", []
+        return "verify", ["affiliate_status_unknown"]
+
+    ot = rp_rules["ownership_test"]
+    threshold = ot["threshold_percent"]
+    direct = _num(party.get("ownership_percentage"))
+    aggregated = _num(party.get("aggregated_ownership_percentage"))
+    control = _fact_yes_no(party, "de_facto_control")
+    pct = aggregated if aggregated is not None else direct
+    if pct is None and control is not True:
+        return "verify", ["ownership_and_control_unknown"]
+    if control is True:
+        return "related", ["de_facto_control_confirmed"]
     if pct >= threshold:
         return "related", []
     return "verify", ["ownership_below_threshold_de_facto_control_unassessed"]
@@ -682,7 +932,7 @@ def _classify_officer(party, rp_rules, case_id, all_parties, debtor_type):
         return "verify", ["officer_of_individual_debtor_data_inconsistency"]
 
     if target_rt == "affiliate":
-        verdict, _ = _classify_affiliate(target, rp_rules)
+        verdict, _ = _classify_affiliate(target, rp_rules, debtor_type)
         return verdict, [f"officer_of_affiliate_{verdict}"]
 
     if target_rt == "none":
@@ -726,19 +976,32 @@ def classify_relation(party, tx_date, rp_rules, case_id=None, all_parties=None, 
     """
     관계라는 '사실'을 특수관계인 해당 여부라는 '판단'으로 옮긴다.
 
-    former_spouse / affiliate / officer 는 parties.csv 의 구조화 필드로 동적
-    판정한다(§related_party.yaml ownership_test). 그 외 유형은 classification
-    딕셔너리의 정적 verdict 를 시간 창(_apply_temporal_window)에 통과시킨다.
+    former_spouse / affiliate / officer / 혈족·인척 / 생계 관계는 parties.csv 의
+    구조화 필드로 동적 판정한다. 그 외 유형은 classification 딕셔너리의 정적
+    verdict 를 시간 창(_apply_temporal_window)에 통과시킨다.
     """
     rt = (party.get("relation_type") or "").strip()
 
     if rt == "former_spouse":
         return _classify_former_spouse(party, tx_date, rp_rules)
     if rt == "affiliate":
-        verdict, flags = _classify_affiliate(party, rp_rules)
+        verdict, flags = _classify_affiliate(party, rp_rules, debtor_type)
         return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
     if rt == "officer":
         verdict, flags = _classify_officer(party, rp_rules, case_id, all_parties, debtor_type)
+        return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
+    kinship_limits = {
+        "lineal_ascendant": 8,
+        "lineal_descendant": 8,
+        "sibling": 8,
+        "affinity": 4,
+        "collateral_relative": 8,
+    }
+    if rt in kinship_limits:
+        verdict, flags = _classify_kinship(party, kinship_limits[rt])
+        return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
+    if rt == "employee":
+        verdict, flags = _classify_employee(party)
         return _apply_temporal_window(verdict, flags, party, tx_date, rp_rules)
 
     entry = rp_rules["classification"].get(rt)
@@ -784,7 +1047,7 @@ def _debt_repayment_within_tolerance(tx, route_rule):
     reduced = _num(tx.get("liability_reduction"))
     if paid is None or reduced is None or paid == 0:
         return False
-    tolerance = route_rule.get("tolerance", 0.02)
+    tolerance = route_rule["tolerance"]
     return abs(paid - reduced) / paid <= tolerance
 
 
@@ -792,6 +1055,15 @@ def _debt_repayment_within_tolerance(tx, route_rule):
 
 def economics(tx, rule):
     """Value Out / Value In. 채무자 기준으로만 계산한다."""
+    if tx.get("action_type") == "debt_repayment":
+        paid = _num(tx.get("consideration_paid"))
+        reduced = _num(tx.get("liability_reduction"))
+        if tx.get("payment_verified") != "Y" or paid is None or reduced is None:
+            return None, 0.0, None, ["debt_repayment_amount_unverified"]
+        excess = max(paid - reduced, 0.0)
+        ratio = 0.0 if excess else None
+        return excess, 0.0, ratio, ["debt_repayment_excess_isolated"]
+
     outs = [_num(tx.get("asset_fair_value")),
             _num(tx.get("liability_increase_value")),
             _num(tx.get("waived_right_value"))]
@@ -801,6 +1073,7 @@ def economics(tx, rule):
     cash = _num(tx.get("consideration_paid")) or 0.0
     if tx.get("payment_verified") != "Y":
         cash = 0.0                                   # 검증되지 않은 대가는 산입하지 않는다
+    debt_reduction = _num(tx.get("liability_reduction")) or 0.0
     benefit = _num(tx.get("debtor_direct_benefit_value")) or 0.0
     if tx.get("benefit_realizability") != "realized":
         benefit = 0.0                                # 추상적 기대는 Value In 이 아니다
@@ -809,7 +1082,7 @@ def economics(tx, rule):
     if benefit and cash and abs(benefit - cash) < 1e-6:
         benefit = 0.0                                # 동일 항목의 이중계상 방지
         notes.append("direct_benefit == consideration_paid — 이중계상 회피")
-    value_in = cash + benefit
+    value_in = cash + debt_reduction + benefit
 
     ratio = (value_in / value_out) if value_out else None
     return value_out, value_in, ratio, notes
@@ -886,7 +1159,7 @@ def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
     """
     min_rank = confidence_rank[ffa["min_confidence"]]
     window = ffa["proximity_window_days"]
-    max_hops = ffa.get("max_hops", 1)
+    max_hops = ffa["max_hops"]
     link_types = ffa["eligible_link_types"]
 
     in_window, delayed = [], []
@@ -930,16 +1203,17 @@ def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
     return in_window, delayed
 
 
-def evaluate_funds_circled_back(ds, case_id, tx, rule, related_counterparty):
+def evaluate_related_party_fund_flow(ds, case_id, tx, rule, related_counterparty):
     """
     이 거래로 자금이 흘러들어온(inbound funds_flow) 경로가 있는지, 그리고
     그것이 신호로 인정되는지 판정한다. 링크는 사실, 이 함수는 판단.
 
-    max_hops 까지 다단계 연쇄(layering)를 추적한다 — 은닉은 한 번에 끝나지 않는다.
+    max_hops 까지 다단계 연쇄(layering)를 추적한다. 이는 자금흐름 연결의 단서이며,
+    추적 금액·계좌 명의가 없는 상태에서 동일 자금의 환류를 확정하지 않는다.
 
     related_counterparty: 이 거래(tx)의 legal_counterparty 가 특수관계인으로
-    판정됐는지. 라벨이 "거래 직후 자금이 관계인에게 환류"라고 주장하는 이상,
-    실제로 이 거래의 상대방이 관계인일 때만 성립시킨다 — 단순히 funds_flow
+    판정됐는지. "특수관계인 상대 거래로 이어지는 자금흐름" 신호이므로 실제로
+    이 거래의 상대방이 관계인일 때만 성립시킨다 — 단순히 funds_flow
     링크 하나가 있다는 사실만으로는(상대방이 무관한 제3자여도) 성립시키지
     않는다.
     """
@@ -980,14 +1254,25 @@ def predicate(pid):
     return deco
 
 
-@predicate("no_consideration")
-def _p1(c): return c["value_in"] == 0
+@predicate("no_verified_consideration")
+def _p1(c):
+    contractual = _num(c["tx"].get("consideration_contractual")) or 0
+    return c["value_in"] == 0 and contractual == 0
 
 
 @predicate("payment_unverified")
 def _p2(c):
     return (_num(c["tx"].get("consideration_contractual")) or 0) > 0 \
         and c["tx"].get("payment_verified") != "Y"
+
+
+@predicate("debt_repayment_excess")
+def _p2b(c):
+    if c["tx"].get("action_type") != "debt_repayment":
+        return False
+    paid = _num(c["tx"].get("consideration_paid"))
+    reduced = _num(c["tx"].get("liability_reduction"))
+    return paid is not None and reduced is not None and paid > reduced
 
 
 @predicate("related_counterparty")
@@ -1005,9 +1290,9 @@ def _p4(c):
 def _p5(c): return "related" in c["pd_verdicts"]
 
 
-@predicate("funds_circled_back")
+@predicate("related_party_fund_flow")
 def _p6(c):
-    return c["funds_circled_back"]
+    return c["related_party_fund_flow"]
 
 
 @predicate("non_cash_waiver")
@@ -1056,6 +1341,10 @@ class Result:
 
 
 def run(ds: Dataset, rules: dict) -> list[Result]:
+    critical = [i for i in ds.integrity_issues if i.severity == IssueSeverity.CRITICAL]
+    if critical:
+        raise ValueError(f"CRITICAL 데이터 무결성 문제 {len(critical)}건 — 판정 실행 거부")
+
     rule = rules["art391-4-gratuitous"]
     rp = rules["related-party-classification"]
     check_predicate_coverage(rule)
@@ -1089,14 +1378,14 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         res.lookback_months, res.lookback_key = months, key
         start, anchors, upper = temporal_window(case, months, rule)
 
-        if td < start:
-            res.drop_reason = f"시간 창 밖 (창 시작 {start})"
-            results.append(res)
-            continue
         nearest = min(anchors, key=lambda a: abs((a[1] - td).days))
         days_to_anchor = (nearest[1] - td).days
         if abs(days_to_anchor) <= boundary_days or abs((td - start).days) <= boundary_days:
             res.flags.append("boundary_case")
+        if td < start:
+            res.drop_reason = f"시간 창 밖 (창 시작 {start})"
+            results.append(res)
+            continue
         if upper and td > upper:
             res.flags.append("post_adjudication_soft")   # 배제하지 않고 표시만
 
@@ -1142,11 +1431,12 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         res.reached = "ranking"
         res.candidate = True
         related_cp = any(v == "related" for v in cp_v)
-        circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule, related_cp)
+        fund_flow_link, ff_flags = evaluate_related_party_fund_flow(
+            ds, case_id, tx, rule, related_cp)
         res.flags += ff_flags
         ctx = dict(tx=tx, value_in=vi, value_out=vo, cp_verdicts=cp_v, pd_verdicts=pd_v,
                    counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor,
-                   funds_circled_back=circled_back)
+                   related_party_fund_flow=fund_flow_link)
         res.signals = [s["id"] for s in rule["priority_signals"] if PREDICATES[s["id"]](ctx)]
         # 신호를 먼저 계산해야 triage_priority 가 signal_count_bands 를 쓸 수 있다
         # (applicable_action_types 밖의 행위, 예: 보증).
@@ -1154,6 +1444,8 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
                          else triage_priority(at, ratio, len(res.signals), rule))
         results.append(res)
 
+    for result in results:
+        result.flags = list(dict.fromkeys(result.flags))
     return results
 
 

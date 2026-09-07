@@ -14,13 +14,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from engine import (                                        # noqa: E402
     Dataset,
+    IntegrityIssue,
+    IssueCategory,
     IssueSeverity,
     _trace_inbound_chains,
-    evaluate_funds_circled_back,
+    evaluate_related_party_fund_flow,
     _classify_affiliate,
+    _classify_kinship,
+    _classify_employee,
     _classify_officer,
     _classify_former_spouse,
     _debt_repayment_within_tolerance,
+    classify_relation,
+    economics,
+    PREDICATES,
+    run,
     triage_priority,
 )
 
@@ -33,7 +41,7 @@ FFA = {
     "max_hops": 3,
     "eligible_link_types": ["funds_flow"],
     "outside_window_flag": "funds_flow_delayed",
-    "multi_hop_flag": "funds_circled_back_multihop",
+    "multi_hop_flag": "related_party_fund_flow_multihop",
     "confidence_order": ["alleged", "probable", "verified"],
 }
 
@@ -152,44 +160,43 @@ def test_trace_link_type_filter():
     assert in_w == [] and delayed == []
 
 
-# ------------------------------------------------------ evaluate_funds_circled_back
-# 라벨이 "거래 직후 자금이 관계인에게 환류"라고 주장하므로, 상대방이 실제로
-# 특수관계인일 때만 성립해야 한다 — funds_flow 링크 하나만으로 무관한 제3자
-# 간 거래에도 "환류"를 붙이면 안 된다 (코덱스 리뷰에서 지적된 오탐).
+# -------------------------------------------------- evaluate_related_party_fund_flow
+# 자금흐름 연결 신호는 상대방이 실제 특수관계인일 때만 성립해야 한다.
+# funds_flow 링크 하나만으로 무관한 제3자 거래에 관계인 신호를 붙이면 안 된다.
 
-def test_circled_back_true_when_counterparty_related():
+def test_related_party_fund_flow_true_when_counterparty_related():
     txs, links = _linear_chain(("A", "2025-01-01"), ("B", "2025-01-10"))
     ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
     rule = {"fund_flow_analysis": FFA}
-    circled, flags = evaluate_funds_circled_back(
+    circled, flags = evaluate_related_party_fund_flow(
         ds, "C1", txs[1], rule, related_counterparty=True)
     assert circled is True
     assert flags == []
 
 
-def test_circled_back_false_when_counterparty_unrelated():
+def test_related_party_fund_flow_false_when_counterparty_unrelated():
     # A -> B 로 funds_flow 링크가 있어도, B 의 legal_counterparty 가 무관한
-    # 제3자면 "관계인에게 환류"라는 결론을 세우지 않는다.
+    # 제3자면 특수관계인 상대 자금흐름 신호를 세우지 않는다.
     txs, links = _linear_chain(("A", "2025-01-01"), ("B", "2025-01-10"))
     ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
     rule = {"fund_flow_analysis": FFA}
-    circled, flags = evaluate_funds_circled_back(
+    circled, flags = evaluate_related_party_fund_flow(
         ds, "C1", txs[1], rule, related_counterparty=False)
     assert circled is False
     assert flags == []
 
 
-def test_circled_back_multihop_flag_still_gated_by_relatedness():
+def test_related_party_fund_flow_multihop_flag_still_gated_by_relatedness():
     txs, links = _linear_chain(
         ("A", "2025-01-01"), ("B", "2025-01-05"), ("C", "2025-01-10"))
     ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
     rule = {"fund_flow_analysis": FFA}
-    circled, flags = evaluate_funds_circled_back(
+    circled, flags = evaluate_related_party_fund_flow(
         ds, "C1", txs[2], rule, related_counterparty=True)
     assert circled is True
-    assert "funds_circled_back_multihop" in flags
+    assert "related_party_fund_flow_multihop" in flags
 
-    circled, flags = evaluate_funds_circled_back(
+    circled, flags = evaluate_related_party_fund_flow(
         ds, "C1", txs[2], rule, related_counterparty=False)
     assert circled is False
     assert flags == []
@@ -237,12 +244,16 @@ def test_affiliate_below_threshold_is_verify_not_not_related():
 def test_affiliate_unknown_ownership_is_verify():
     v, flags = _classify_affiliate({"ownership_percentage": ""}, RP)
     assert v == "verify"
-    assert "ownership_percentage_unknown" in flags
+    assert "ownership_and_control_unknown" in flags
 
 
-def test_affiliate_default_threshold_when_rule_missing():
-    assert _classify_affiliate({"ownership_percentage": "30"}, {})[0] == "related"
-    assert _classify_affiliate({"ownership_percentage": "29"}, {})[0] == "verify"
+def test_affiliate_requires_configured_threshold():
+    try:
+        _classify_affiliate({"ownership_percentage": "30"}, {})
+    except KeyError as exc:
+        assert exc.args == ("ownership_test",)
+    else:
+        raise AssertionError("법정 임계값을 코드 기본값으로 대체하면 안 된다")
 
 
 # ---------------------------------------------------------------- _classify_officer
@@ -259,10 +270,11 @@ def test_officer_of_debtor_individual_flags_data_inconsistency():
     assert "officer_of_individual_debtor_data_inconsistency" in flags
 
 
-def test_officer_of_affiliate_inherits_ownership_verdict():
-    parties = {("C1", "AFF"): {"relation_type": "affiliate", "ownership_percentage": "62"}}
+def test_officer_of_affiliate_inherits_verified_affiliate_status():
+    parties = {("C1", "AFF"): {
+        "relation_type": "affiliate", "affiliate_status_verified": "Y"}}
     assert _classify_officer({"officer_of": "AFF"}, RP, "C1", parties, "corporation")[0] == "related"
-    parties["C1", "AFF"]["ownership_percentage"] = "10"
+    parties["C1", "AFF"]["affiliate_status_verified"] = ""
     assert _classify_officer({"officer_of": "AFF"}, RP, "C1", parties, "corporation")[0] == "verify"
 
 
@@ -337,9 +349,14 @@ def test_debt_repayment_missing_data_does_not_route():
         {"consideration_paid": "0", "liability_reduction": "0"}, {}) is False
 
 
-def test_debt_repayment_default_tolerance():
+def test_debt_repayment_requires_configured_tolerance():
     tx = {"consideration_paid": "100", "liability_reduction": "100"}
-    assert _debt_repayment_within_tolerance(tx, {}) is True          # 기본 0.02
+    try:
+        _debt_repayment_within_tolerance(tx, {})
+    except KeyError as exc:
+        assert exc.args == ("tolerance",)
+    else:
+        raise AssertionError("법률·운영 임계값을 코드 기본값으로 대체하면 안 된다")
 
 
 # ------------------------------------------------------------------ triage_priority
@@ -364,3 +381,135 @@ def test_triage_priority_out_of_scope_uses_signal_count():
 def test_triage_priority_boundary_at_band_edge():
     assert triage_priority("sale", 0.10, 0, RULE) == "high"         # max: 0.10 포함
     assert triage_priority("sale", 0.50, 0, RULE) == "medium"       # max: 0.50 포함
+
+
+# ----------------------------------------------------------- 법정 관계 사실 필드
+
+def test_kinship_requires_degree_and_applies_statutory_limit():
+    assert _classify_kinship({"kinship_degree": ""}, 4)[0] == "verify"
+    assert _classify_kinship({"kinship_degree": "4"}, 4)[0] == "related"
+    assert _classify_kinship({"kinship_degree": "5"}, 4)[0] == "not_related"
+    verdict, _ = classify_relation(
+        {"relation_type": "lineal_ascendant", "kinship_degree": "9"},
+        date(2025, 1, 1), RP,
+    )
+    assert verdict == "not_related"
+
+
+def test_employee_uses_livelihood_facts_not_job_title():
+    assert _classify_employee({})[0] == "verify"
+    assert _classify_employee({"financial_dependency": "Y"})[0] == "related"
+    assert _classify_employee({
+        "financial_dependency": "N", "shared_livelihood": "N"})[0] == "not_related"
+
+
+def test_corporate_affiliate_requires_verified_affiliate_status():
+    assert _classify_affiliate({}, RP, "corporation")[0] == "verify"
+    assert _classify_affiliate(
+        {"affiliate_status_verified": "Y"}, RP, "corporation")[0] == "related"
+    assert _classify_affiliate(
+        {"affiliate_status_verified": "N"}, RP, "corporation")[0] == "not_related"
+
+
+def test_individual_affiliate_uses_aggregated_ownership_or_control():
+    party = {"ownership_percentage": "10", "aggregated_ownership_percentage": "35"}
+    assert _classify_affiliate(party, RP, "individual")[0] == "related"
+    assert _classify_affiliate({"de_facto_control": "Y"}, RP, "individual")[0] == "related"
+
+
+# --------------------------------------------------------------- 경제 실질
+
+def _economic_tx(**overrides):
+    tx = {
+        "action_type": "sale",
+        "asset_fair_value": "100",
+        "liability_increase_value": "",
+        "liability_reduction": "",
+        "waived_right_value": "",
+        "consideration_contractual": "0",
+        "consideration_paid": "0",
+        "payment_verified": "N",
+        "debtor_direct_benefit_value": "",
+        "benefit_realizability": "",
+    }
+    tx.update(overrides)
+    return tx
+
+
+def test_verified_debt_reduction_is_value_in():
+    tx = _economic_tx(liability_reduction="100")
+    assert economics(tx, {})[:3] == (100.0, 100.0, 1.0)
+
+
+def test_debt_repayment_isolates_only_excess():
+    tx = _economic_tx(
+        action_type="debt_repayment", asset_fair_value="",
+        consideration_paid="130", payment_verified="Y", liability_reduction="100")
+    assert economics(tx, {})[:3] == (30.0, 0.0, 0.0)
+
+
+def test_unverified_contractual_payment_is_not_double_counted_as_no_consideration():
+    tx = _economic_tx(consideration_contractual="30", consideration_paid="30")
+    ctx = {"tx": tx, "value_in": economics(tx, {})[1]}
+    assert PREDICATES["payment_unverified"](ctx) is True
+    assert PREDICATES["no_verified_consideration"](ctx) is False
+
+
+# ------------------------------------------------------------ 입력·그래프 무결성
+
+def test_malformed_or_non_finite_number_is_critical_not_missing_value():
+    for raw in ("not-a-number", "NaN", "inf", "-inf"):
+        ds = Dataset(
+            cases={}, parties={}, links=[],
+            transactions=[{
+                "transaction_id": "T1", "transaction_date": "2025-01-01",
+                "asset_fair_value": raw, "payment_verified": "",
+                "benefit_realizability": "",
+            }],
+        )
+        issues = ds._check_value_formats()
+        assert len(issues) == 1
+        assert issues[0].severity == IssueSeverity.CRITICAL
+        assert issues[0].details[0]["field"] == "asset_fair_value"
+
+
+def test_same_day_multi_node_cycle_is_critical():
+    txs = [
+        {"transaction_id": "A", "case_id": "C", "transaction_date": "2025-01-01"},
+        {"transaction_id": "B", "case_id": "C", "transaction_date": "2025-01-01"},
+    ]
+    links = [
+        {"link_id": "L1", "case_id": "C", "from_transaction_id": "A",
+         "to_transaction_id": "B", "link_type": "funds_flow", "confidence": "verified"},
+        {"link_id": "L2", "case_id": "C", "from_transaction_id": "B",
+         "to_transaction_id": "A", "link_type": "funds_flow", "confidence": "verified"},
+    ]
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
+    issues = ds._check_tx_link_cycles()
+    assert len(issues) == 1
+    assert issues[0].severity == IssueSeverity.CRITICAL
+
+
+def test_duplicate_transaction_link_id_and_edge_are_reported():
+    links = [
+        {"link_id": "L1", "case_id": "C", "from_transaction_id": "A",
+         "to_transaction_id": "B", "link_type": "funds_flow"},
+        {"link_id": "L1", "case_id": "C", "from_transaction_id": "A",
+         "to_transaction_id": "B", "link_type": "funds_flow"},
+    ]
+    ds = Dataset(cases={}, transactions=[], parties={}, links=[], tx_links=links)
+    issues = ds._check_duplicate_keys()
+    assert any(i.severity == IssueSeverity.CRITICAL and "link_id" in i.message for i in issues)
+    assert any(i.severity == IssueSeverity.WARNING and "거래 간 링크" in i.message for i in issues)
+
+
+def test_engine_refuses_to_run_with_critical_integrity_issue():
+    issue = IntegrityIssue(
+        IssueCategory.VALUE_CONSTRAINT, IssueSeverity.CRITICAL, "invalid input")
+    ds = Dataset(cases={}, transactions=[], parties={}, links=[], integrity_issues=[issue])
+    try:
+        run(ds, {})
+    except ValueError as exc:
+        assert "판정 실행 거부" in str(exc)
+    else:
+        raise AssertionError("CRITICAL 입력으로 엔진을 직접 호출해도 중단해야 한다")

@@ -21,8 +21,9 @@ You may obtain a copy of the License at
   그 자체가 아니다.
 - 서울회생법원 「개인파산관재인 직무편람」의 내용은 인용 및 참조에 그친다.
 
-특히 rules/related_party.yaml 의 특수관계인 분류는 관련 시행령 원문과 대조되지
-않은 초안(status: draft)이다. 실제 사건에 사용해서는 안 된다.
+rules/related_party.yaml 은 시행령 원문 대조 단계(status: spec_verified)이나 법률
+전문가 검토 전이고, rules/art391_4_gratuitous.yaml 은 초안(status: draft)이다.
+CLI는 이 상태를 실행 시 표시한다. production 승인 전 실제 사건에 사용해서는 안 된다.
 
 개별 사건의 부인권 행사 여부는 사건 기록, 증거, 최신 법령·판례 및 담당
 파산관재인의 법률적 판단에 따라 결정되어야 한다.

@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import csv
+import math
 import sys
 from pathlib import Path
 
-from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
+if __package__:
+    from .engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
+else:  # 직접 실행(`python src/cli.py`) 호환
+    from engine import Dataset, Result, STAGE_ORDER, load_rules, partition, run, IssueCategory, IssueSeverity
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,6 +23,19 @@ if hasattr(sys.stdout, "reconfigure"):        # Python 3.7+
 
 def won(v):
     return "산출 불가" if v is None else f"{v:,.0f}원"
+
+
+def report_rule_status(rules):
+    """법률 검토·운영 승인 전 룰이 조용히 실사건용처럼 보이지 않게 한다."""
+    pending = [r for r in rules.values() if r.get("status") != "production"]
+    if not pending:
+        return
+    print("=" * 74)
+    print("⚠ 룰 승인 상태 — 연구·검증용 실행")
+    print("=" * 74)
+    for rule in sorted(pending, key=lambda r: r["rule_id"]):
+        print(f"  • {rule['rule_id']}: {rule['status']}")
+    print("  production 승인 전에는 실제 사건의 법률판단에 사용하지 말 것.\n")
 
 
 # ------------------------------------------------------------------ 무결성 검사 리포트
@@ -92,7 +109,7 @@ def report(ds, rules, results):
     print("=" * 74)
 
     print(f"\n【{labels['unvalued']}】  {len(unvalued)}건")
-    print("  금액으로 줄을 세울 수 없을 뿐, 회수 기대액이 0인 것이 아니다.\n")
+    print("  금액으로 줄을 세울 수 없을 뿐, 순출연 추정액이 0인 것이 아니다.\n")
     for r in unvalued:
         tx = next(t for t in ds.transactions if t["transaction_id"] == r.tx_id)
         print(f"  {r.tx_id}  [{r.priority}]  {tx['transaction_date']}  {tx['action_type']}")
@@ -100,7 +117,7 @@ def report(ds, rules, results):
         print(f"        신호: {', '.join(r.signals) or '-'}")
 
     print(f"\n【{labels['valued']}】  {len(valued)}건")
-    print(f"\n  {'거래':7}{'우선':11}{'회수 기대액':>18}{'대가비율':>10}  소급  신호")
+    print(f"\n  {'거래':7}{'우선':11}{'순출연 추정액':>18}{'대가비율':>10}  소급  신호")
     print("  " + "-" * 70)
     for r in valued:
         ratio = "     -" if r.ratio is None else f"{r.ratio:6.4f}"
@@ -108,52 +125,100 @@ def report(ds, rules, results):
               f"{ratio:>10}  {r.lookback_months:>2}월  {len(r.signals)}")
 
     total = sum(r.value_out - r.value_in for r in valued)
-    print(f"\n  회수 기대액 합계(평가 완료분만): {total:,.0f}원")
+    print(f"\n  순출연 추정액 합계(평가 완료분만): {total:,.0f}원")
     print(f"  ※ 평가 필요 {len(unvalued)}건은 합계에 포함되지 않음\n")
 
 
 # ------------------------------------------------------------------ 대조
 
-def validate(results):
-    exp = {r["transaction_id"]: r for r in
-           csv.DictReader(open(ROOT / "data/sample/expected_results.csv", encoding="utf-8"))}
-    got = {r.tx_id: r for r in results}
+def _duplicates(values):
+    seen, duplicates = set(), []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    return duplicates
+
+
+def _optional(raw, cast=str):
+    raw = (raw or "").strip()
+    return None if raw == "" else cast(raw)
+
+
+def _list_field(raw):
+    return [item.strip() for item in (raw or "").split(";") if item.strip()]
+
+
+def validate(results, expected_path=None):
+    expected_path = expected_path or ROOT / "data/sample/expected_results.csv"
+    with open(expected_path, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
 
     mismatches, unreachable = [], []
+    for tid in _duplicates(r["transaction_id"] for r in rows):
+        mismatches.append((tid, "기대값 ID 중복", "유일", "중복"))
+    for tid in _duplicates(r.tx_id for r in results):
+        mismatches.append((tid, "실제 결과 ID 중복", "유일", "중복"))
+
+    exp = {r["transaction_id"]: r for r in rows}
+    got = {r.tx_id: r for r in results}
+    for tid in sorted(set(got) - set(exp)):
+        mismatches.append((tid, "예상 밖 결과", "없음", "결과 생성"))
+    for tid in sorted(set(exp) - set(got)):
+        mismatches.append((tid, "결과 없음", "결과 생성", "없음"))
+
     for tid, e in exp.items():
         r: Result | None = got.get(tid)
         if r is None:
-            mismatches.append((tid, "결과 없음", "-", "-"))
             continue
 
-        want = e["expected_candidate"] == "Y"
+        raw_candidate = e["expected_candidate"].strip()
+        if raw_candidate not in {"Y", "N"}:
+            mismatches.append((tid, "기대 후보값 형식", "Y/N", raw_candidate or "빈 값"))
+            continue
+        want = raw_candidate == "Y"
         if want != r.candidate:
             mismatches.append((tid, "후보 여부", "Y" if want else "N",
                                "Y" if r.candidate else f"N ({r.drop_reason})"))
 
-        wm = e["expected_lookback_months"].strip()
-        if wm and r.lookback_months and int(wm) != r.lookback_months:
-            mismatches.append((tid, "소급기간", f"{wm}월", f"{r.lookback_months}월"))
+        comparisons = [
+            ("도달 단계", _optional(e.get("expected_reached")), r.reached),
+            ("소급기간", _optional(e.get("expected_lookback_months"), int), r.lookback_months),
+            ("우선순위", _optional(e.get("expected_priority")), r.priority),
+            ("탈락 사유", _optional(e.get("expected_drop_reason")), r.drop_reason),
+        ]
+        for what, want_value, got_value in comparisons:
+            if want_value != got_value:
+                mismatches.append((tid, what, str(want_value), str(got_value)))
 
-        wp = e["expected_priority"].strip()
-        if wp and r.priority and wp != r.priority:
-            mismatches.append((tid, "우선순위", wp, r.priority))
+        for column, what, got_value in (
+            ("expected_value_out", "Value Out", r.value_out),
+            ("expected_value_in", "Value In", r.value_in),
+            ("expected_ratio", "대가비율", r.ratio),
+        ):
+            want_value = _optional(e.get(column), float)
+            equal = (want_value is None and got_value is None) or (
+                want_value is not None and got_value is not None
+                and math.isclose(want_value, got_value, rel_tol=1e-9, abs_tol=1e-9)
+            )
+            if not equal:
+                mismatches.append((tid, what, str(want_value), str(got_value)))
+
+        want_signals = _list_field(e.get("expected_signals"))
+        if want_signals != r.signals:
+            mismatches.append((tid, "신호", ";".join(want_signals) or "-",
+                               ";".join(r.signals) or "-"))
+        want_flags = _list_field(e.get("expected_flags"))
+        if want_flags != r.flags:
+            mismatches.append((tid, "플래그", ";".join(want_flags) or "-",
+                               ";".join(r.flags) or "-"))
 
         # 이 케이스가 검증하려던 단계에 실제로 도달했는가
         ts = e.get("target_stage", "").strip()
-        if ts and STAGE_ORDER.get(ts, 0) > STAGE_ORDER.get(r.reached, 0):
+        if ts not in STAGE_ORDER:
+            mismatches.append((tid, "target_stage", "알려진 단계", ts or "빈 값"))
+        elif STAGE_ORDER[ts] > STAGE_ORDER.get(r.reached, 0):
             unreachable.append((tid, ts, r.reached, r.drop_reason or "-"))
-
-        # target_stage == signal 케이스는 신호 자체를 검증한다.
-        # expected_flags 컬럼은 다른 행에서 미구현 라벨(routed_to_* 등)도
-        # 섞여 있어 전체를 강제 대조하면 무관한 오탐이 쏟아진다.
-        # 신호 검증이 실제로 필요한 signal 단계에서만 좁게 확인한다.
-        if ts == "signal":
-            expected_signals = [s.strip() for s in e.get("expected_flags", "").split(";") if s.strip()]
-            missing_signals = [s for s in expected_signals if s not in r.signals]
-            if missing_signals:
-                mismatches.append((tid, "신호", ";".join(expected_signals),
-                                   f"누락: {', '.join(missing_signals)} (실제: {', '.join(r.signals) or '-'})"))
 
     print("=" * 74)
     print("기대값 대조")
@@ -182,12 +247,20 @@ def main():
     # 룰을 먼저 로드한다 — 무결성 검사가 unilateral_acts(상대방 없는 단독행위)를
     # 알아야 legal_counterparty 커버리지 검사에서 그것들을 제외할 수 있다.
     rules = load_rules(ROOT)
+    report_rule_status(rules)
     unilateral = rules["art391-4-gratuitous"]["action_filter"].get("unilateral_acts", [])
     ds = Dataset.load(ROOT, unilateral_acts=unilateral)
 
     # 무결성 검사 결과 출력 (리포트 앞에)
     report_integrity(ds)
     critical = [i for i in ds.integrity_issues if i.severity == IssueSeverity.CRITICAL]
+
+    if critical:
+        print("=" * 74)
+        print(f"⚠ CRITICAL 무결성 문제 {len(critical)}건 — 판정 실행을 중단한다.")
+        print("  입력을 수정한 뒤 다시 실행할 것.")
+        print("=" * 74)
+        return 2
 
     # 본 리포트
     results = run(ds, rules)
@@ -196,18 +269,12 @@ def main():
     # 기대값 대조
     m, u = validate(results)
 
-    if critical:
-        print("=" * 74)
-        print(f"⚠ CRITICAL 무결성 문제 {len(critical)}건 — 위 결과의 신뢰도가 보장되지 않는다.")
-        print("  사건을 분리해 재검토하거나, 원인을 해소한 뒤 다시 실행할 것.")
-        print("=" * 74)
-
     # 종료 코드는 비트마스크다: bit0(1)=기대값 불일치, bit1(2)=CRITICAL 무결성 문제.
     # 예전에는 CRITICAL 이 있어도 exit 0 이었다 — "리포트에는 나오지만 자동화는
     # 통과로 본다"는 fail-open 이 법률 조사 도구에는 맞지 않는다(코덱스 리뷰).
     # 다만 원인 구분(§7)은 유지해야 하므로 1로 뭉개지 않고 비트를 분리한다 —
     # CI 는 `code & 1`(골든파일) 과 `code & 2`(무결성) 를 따로 검사할 수 있다.
-    return (1 if m else 0) | (2 if critical else 0)
+    return 1 if (m or u) else 0
 
 
 if __name__ == "__main__":

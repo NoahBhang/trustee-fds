@@ -13,10 +13,9 @@
 >
 > 특히 `rules/related_party.yaml` 의 특수관계인 분류는 시행령 제4조 원문과
 > 대조했으나(`status: spec_verified`) **법률 전문가의 검토를 받지 않았다.**
-> `former_spouse`·`affiliate`·`officer` 는 parties.csv 의 구조화 필드
-> (`ownership_percentage`, `officer_of`, `post_divorce_dependency`)가 채워지면
-> related/not_related 로 확정되고, 비어 있으면 사유와 함께 `verify` 로 남는다.
-> `affiliate`/`officer` 의 30% 임계값은 '계열회사'(공정거래법) 정의의 근사치다.
+> 촌수·생계관계·합산지분·사실상 지배력·계열회사 확인 여부는 `parties.csv`의
+> 구조화 필드로 판정하며, 필수 사실이 비어 있으면 사유와 함께 `verify`로 남는다.
+> 한 당사자의 복수 관계를 별도 행으로 표현하는 모델은 아직 구현되지 않았다.
 > 실제 사건에 사용해서는 안 된다.
 
 ---
@@ -27,7 +26,7 @@
 |---|---|
 | 법정 시간 창과 행위 유형으로 후보 선별 | 부인권 성립 여부의 자동 판정 |
 | Value Out ↔ Value In 비대칭 산출 | 대가비율을 법정 기준으로 선언 |
-| 회수 기대액 기준 우선순위 정렬 | 점수를 승소 확률로 제시 |
+| 순출연 추정액 기준 우선순위 정렬 | 이를 회수확률을 반영한 기대값으로 제시 |
 | 확인 사실과 미확인 사실의 구별 표시 | 증거 부재를 무상성으로 단정 |
 | 사람이 검증해야 할 항목의 명시 | 공정가치·지급정지일의 종국적 확정 |
 | 평가액 미상 항목의 별도 분리 표시 | **부작위의 탐지** (§8 참조) |
@@ -61,7 +60,7 @@
 ## 3. 아키텍처
 
 ```
-  입력  cases.csv · transactions.csv · parties.csv · transaction_parties.csv
+  입력  cases.csv · transactions.csv · parties.csv · transaction_parties.csv · transaction_links.csv
      │
      ▼
 ┌───────────────────────────────────────────────────────┐
@@ -79,8 +78,8 @@
      ▼
 ┌───────────────────────────────────────────────────────┐
 │ 3층  정렬                                             │
-│   ① 회수 기대액 미상 — 평가 필요   ← 위에 표시        │
-│   ② 회수 기대액 순                                    │
+│   ① 순출연 추정액 미상 — 평가 필요 ← 위에 표시        │
+│   ② 순출연 추정액 순                                  │
 └───────────────────────────────────────────────────────┘
      │
      ▼
@@ -94,11 +93,13 @@
 
 판정 로직을 파이썬 `if` 문에 넣지 않고 `rules/*.yaml` 에 둔다. 이유는 셋이다.
 
-1. 법령이 개정되면 YAML만 수정한다.
+1. 법적 근거와 실행값을 YAML에 집중해 변경 지점을 추적할 수 있다.
 2. 판정 결과에서 조문으로 역추적된다.
 3. **법률 전문가가 코드를 읽지 않고 룰을 검토할 수 있다.**
 
 세 번째가 핵심이다. 각 룰 파일 상단에는 법률 검토 확인란이 있다.
+술어의 의미가 바뀌는 개정은 YAML만 고치는 것으로 끝나지 않으며, 대응 파이썬 함수와
+회귀 테스트도 함께 바꿔야 한다. 엔진은 필수 설정을 코드 기본값으로 보충하지 않는다.
 
 ### 두 가지 설계 원칙
 
@@ -113,10 +114,11 @@
 
 ## 4. 데이터 모델
 
-네 개 테이블로 정규화되어 있다.
+다섯 개 테이블로 정규화되어 있다.
 
 ```
 cases ──< transactions ──< transaction_parties >── parties
+                  └──────< transaction_links
 ```
 
 ### `cases`
@@ -135,10 +137,10 @@ cases ──< transactions ──< transaction_parties >── parties
 
 ```
 지급정지일 시나리오 (CASE-001, 파산신청일 2025-11-14 고정)
-  미특정 (파산신청일만)   후보 10건   회수 기대액 1,177,000,000원
-  2025-08-20             후보 13건   회수 기대액 1,320,000,000원
-  2025-05-01             후보 16건   회수 기대액 1,375,000,000원
-  2025-01-10             후보 16건   회수 기대액 1,375,000,000원
+  미특정 (파산신청일만)   후보 12건   순출연 추정액 1,233,000,000원
+  2025-08-20             후보 15건   순출연 추정액 1,376,000,000원
+  2025-05-01             후보 18건   순출연 추정액 1,431,000,000원
+  2025-01-10             후보 18건   순출연 추정액 1,431,000,000원
 ```
 
 관재인이 "지급정지 시점을 앞당겨 주장할 실익"을 즉시 볼 수 있게 하는 것이 목적이다.
@@ -154,7 +156,11 @@ cases ──< transactions ──< transaction_parties >── parties
 | `relation_type` | 배우자 / 직계비속 / 형제 / 인척 / 계열회사 등 — **사실** |
 | `relation_valid_from`, `relation_valid_to` | **관계는 변한다.** 이혼·퇴임·지분매각 |
 | `relation_basis`, `relation_source` | 증빙 |
-| `ownership_percentage` | `affiliate` 판정용. 30% 이상이면 related(개인·법인 채무자 공통 임계값) |
+| `kinship_degree` | 인척 4촌·혈족 8촌 범위를 확인. 결측이면 `verify` |
+| `financial_dependency`, `shared_livelihood` | 직원 등 생계 관계를 신분과 분리해 판정 |
+| `ownership_percentage`, `aggregated_ownership_percentage` | 개인 채무자의 단독·관계인 합산 지분율 |
+| `de_facto_control` | 임원 임면 등 사실상 영향력(Y/N) |
+| `affiliate_status_verified` | 법인 채무자의 공정거래법상 계열회사 해당 확인(Y/N) |
 | `officer_of` | `officer` 판정용. 임원으로 있는 법인의 `party_id` (자기 자신을 가리키면 채무자 법인의 임원) |
 | `post_divorce_dependency` | `former_spouse` 판정용. 이혼 후에도 채무자 재산으로 생계 유지하는지(Y/N) |
 
@@ -197,6 +203,7 @@ D-001,CASE-001,채무자 본인,individual,self,...
 | `asset_fair_value` | 출연재산의 합리적 가치 (null 허용) |
 | `fair_value_source` | 감정 / 시세 / 거래사례 / 추정 |
 | `liability_increase_value` | 보증 등으로 증가한 채무 |
+| `liability_reduction` | 실제 확인된 채무 감소. Value In에 포함 |
 | `waived_right_value` | 포기한 권리의 가치 |
 | `consideration_contractual` | 계약서상 명목 대가 |
 | `consideration_paid` | 실제 지급이 확인된 대가 |
@@ -215,8 +222,8 @@ D-001,CASE-001,채무자 본인,individual,self,...
 
 ### `transaction_links` (로드맵 4-a · 4-b)
 
-거래와 거래 사이의 연결도 **사실** 로만 기록한다. "환류로 볼 것인가"는
-`fund_flow_analysis`(rules/art391_4_gratuitous.yaml)가 판단한다 — `parties`와
+거래와 거래 사이의 연결도 **사실** 로만 기록한다. 관계인 상대 거래로 이어지는
+자금흐름 단서인지 여부는 `fund_flow_analysis`가 판단한다 — `parties`와
 `related_party.yaml`의 관계와 동일한 분리다.
 
 | 필드 | 설명 |
@@ -229,9 +236,12 @@ D-001,CASE-001,채무자 본인,individual,self,...
 
 **다단계 연쇄(layering)를 `max_hops`(현재 3)까지 추적한다.** 은닉은 한 번에 끝나지
 않는다. 샘플의 T001(배우자에게 매각) → T021(조카 계좌 경유) → T025(배우자에게 최종
-귀속)는 각 홉만 보면 평범하지만 이으면 환류다. 2홉 이상으로 잡힌 경우
-`funds_circled_back_multihop` 플래그로 직접 연결과 구별해 표시한다 — 증거 강도가
+귀속)는 각 홉만 보면 평범하지만 이으면 자금흐름 연결이 드러난다. 2홉 이상이면
+`related_party_fund_flow_multihop` 플래그로 직접 연결과 구별해 표시한다 — 증거 강도가
 다르므로 관재인이 스스로 판단할 수 있어야 한다.
+
+현재 링크에는 추적 금액과 계좌 명의가 없으므로 `related_party_fund_flow`는 환류의
+단서일 뿐 동일 자금의 재귀속을 확정하지 않는다. 출력도 "환류 확인"으로 표현하지 않는다.
 
 **약한 고리 원칙.** 체인의 각 홉마다 `min_confidence` 와 `proximity_window_days` 를
 독립 적용한다. 한 홉이라도 `alleged` 면 그 경로는 거기서 끊기고, 한 홉이라도 시간창
@@ -258,9 +268,9 @@ D-001,CASE-001,채무자 본인,individual,self,...
 항변은 별도로 존재하므로, 시스템은 요건 충족을 부인 성립으로 표현하지 않는다.
 
 특수관계 판정은 시행령 제4조 원문과 대조를 마쳤고(`related_party.yaml` `status:
-spec_verified`), `former_spouse`·`affiliate`·`officer` 세 유형은 `ownership_percentage`
-· `officer_of` · `post_divorce_dependency`(parties.csv 구조화 필드)가 채워지면 related/
-not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴 `verify` 로 남는다 —
+spec_verified`), `former_spouse`·`affiliate`·`officer` 및 촌수·생계 관계는 구조화
+필드가 채워지면 related/not_related 로 동적 확정된다. 필드가 비어 있으면 사유가
+담긴 `verify` 로 남는다 —
 "구현이 없어서"가 아니라 "이 건의 사실이 아직 없어서"다.
 
 파서를 먼저 만들지 않는 이유는 **디버깅 경계** 때문이다. 판정 엔진이 굳기 전에
@@ -275,7 +285,7 @@ not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴
 | 1 | 데이터 모델 정규화 | 완료 |
 | 2 | 룰 명세 (`art391_4`, `related_party`) | 완료 |
 | 3 | 판정 실행기 + 기대값 대조 | 완료 |
-| 4-a | 거래 간 링크 — 1-hop 직접 연결 (`funds_circled_back`) | 완료 |
+| 4-a | 거래 간 링크 — 1-hop 직접 연결 (`related_party_fund_flow`) | 완료 |
 | 4-b | 거래 간 링크 — 다단계 연쇄 (layering) | 완료 |
 | 5 | 판례 기반 테스트 스위트 | 완료 |
 | 6 | 지급정지일 민감도 분석 (CLI 노출) | |
@@ -285,8 +295,8 @@ not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴
 **4-a를 먼저 끊고 4-b를 나중에 얹은 이유.** 다단계 연쇄 탐지는 1-hop이 검증되기 전에
 만들면 버그가 났을 때 "1홉이 틀렸나 체인 로직이 틀렸나"를 구분할 수 없다. 1-hop을 먼저
 실제 사례(T001→T021)로 검증한 뒤, 그 위에 2홉 대조군(T025)을 얹어 확장했다.
-`transaction_links` 는 사실(계좌 추적으로 확인된 연결)만 담고, "환류로 볼 것인가"는
-`fund_flow_analysis`(룰)가 판단한다 — 원칙 2의 반복 적용이다.
+`transaction_links` 는 사실(계좌 추적으로 확인된 연결)만 담고, 룰은 관계인 상대
+거래로 이어지는 자금흐름 단서까지만 판정한다 — 원칙 2의 반복 적용이다.
 
 **이 단계에서 시스템이 처음으로 거래 하나가 아니라 거래의 연쇄를 본다.** 단건
 스크리닝에서 관계망 분석으로 넘어가는 지점이다.
@@ -300,6 +310,11 @@ not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴
 
 라벨이 붙은 데이터셋이 세상에 존재하지 않으므로 PR-AUC 같은 지표를 쓰지 않는다.
 대신 **각 케이스가 무엇을 검증하는지** 를 명시하고, 실제 판례를 기대값으로 삼는다.
+
+`expected_results.csv`는 결과 ID 집합과 도달 단계·후보 여부·소급기간·우선순위·
+Value Out/In·대가비율·신호·플래그·탈락 사유를 모두 대조한다. 기대하지 않은 결과,
+중복 ID, 기대값이 있는데 실제값이 `None`인 경우도 실패한다. 예전처럼 일부 필드만
+truthy일 때 비교하지 않으므로 CI의 초록불이 검증 공백을 숨기지 않는다.
 
 ### `target_stage` — 케이스는 자기가 검증하려는 단계까지 도달해야 한다
 
@@ -337,7 +352,7 @@ not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴
 | T015 | (정상매매) | 대가비율 0.9583으로 3단계에서 제외 — 시간창이 아니라 경제실질에서 걸러져야 판별력이 있다 |
 | T010 | 2012다87751 원리 — 일부 금원 수수도 전체 경제적 실질로 비교 | 대가비율 0.3226, 지급 확인됨에도 여전히 후보(candidate) |
 | T014 | (자기 채무 정상 변제) | route_out — 대출잔액 감소분과 지급액 일치, 허용오차 이내 |
-| T027 | 2006다50444 원리 — 구상권도 언제나 대가는 아니다; 과다변제는 순재산 중립이 아니다 | route_out **안 됨** — 지급액 130,000,000 대비 실제 채무 감소 100,000,000, 허용오차(2%) 초과. **이 케이스가 route_out 구현의 실제 버그를 드러냈다**(아래 참조) |
+| T027 | 2006다50444 원리 — 구상권도 언제나 대가는 아니다; 과다변제는 순재산 중립이 아니다 | route_out **안 됨** — 지급액 130,000,000 중 실제 채무 감소 100,000,000을 뺀 초과분 30,000,000만 후보로 계산 |
 | T028 | (상속포기) | route_out — 인적 결단의 성격으로 배제. 이전에는 샘플이 없어 이 규칙이 한 번도 실행된 적이 없었다 |
 | T012 | (상속재산분할협의상 지분 포기) | 상대방 복수, 부인 검토 대상으로 후보 유지 |
 
@@ -346,7 +361,8 @@ not_related 로 동적 확정된다. 필드가 비어 있으면 사유가 담긴
 **숫자 조건(허용오차)을 전혀 평가하지 않았다.** 그 결과 모든 `debt_repayment` 가
 무조건 라우팅되어, 3천만원 초과변제 같은 사안도 검토 없이 조용히 사라졌을 것이다.
 `_debt_repayment_within_tolerance()` 로 실제 계산을 구현하고, 옛 로직으로 T027을
-재현해 라우팅되는 것을 확인한 뒤 고쳤다.
+재현해 라우팅되는 것을 확인한 뒤 고쳤다. 이어서 `economics()`가 초과분만
+Value Out으로 분리하고 `debt_repayment_excess` 신호를 남기도록 구현했다.
 
 **부인이 부정된 사안이 특히 중요하다.** 오탐의 경계를 정의하기 때문이다. 위 표의
 T015·T014·T028·T017이 그 경계다.
@@ -363,22 +379,22 @@ T015·T014·T028·T017이 그 경계다.
 
 | 심각도 | 의미 | 예 |
 |---|---|---|
-| CRITICAL | 조용히 판정 오류로 이어짐 | `legal_counterparty` 누락 → 소급기간이 잘못 6월로 판정 / `cases`·`parties` 중복 키 → 뒤 행이 앞 행을 조용히 덮어씀 / 링크의 시간 역행·자기참조·교차 사건 |
+| CRITICAL | 조용히 판정 오류로 이어짐 | 잘못된 날짜·숫자·열거값 / `legal_counterparty` 누락 / 중복 기본키 / 링크의 시간 역행·자기참조·순환·교차 사건 |
 | WARNING | 조용히 데이터가 소실됨 | `ultimate_beneficiary` 누락, 고아 링크, 중복 `transaction_parties` 링크, `share_ratio` 합 ≠ 1.0 |
-| INFO | 이미 예외로 죽지만 진단이 나쁨 | 존재하지 않는 `case_id` 참조 |
+| INFO | 판정에는 영향 없지만 진단 개선이 필요함 | 어떤 거래에서도 참조되지 않는 당사자 |
 
 검사 목록(`Dataset._check_*`): `party_id` 참조 · `legal_counterparty` 커버리지
 (`action_filter.unilateral_acts` 는 제외) · 교차 사건 검증 · 고아 거래 링크 ·
-중복 키(`cases`/`parties`/`transactions`/`transaction_parties`) · `case_id`
+입력 형식 · 중복 키(`cases`/`parties`/`transactions`/`transaction_parties`/
+`transaction_links`) · `case_id`
 커버리지 · 참조되지 않는 당사자(`self` 제외, INFO) · `share_ratio` 합 ·
-`transaction_links` 참조·시간순·자기참조.
+`transaction_links` 참조·시간순·자기참조·다중 노드 순환.
 
-발견된 문제는 예외를 던지지 않고 리포트 상단에 별도 섹션으로 표시한다.
-불완전한 실제 사건 데이터를 이유로 리포트 전체를 막으면 도구로서 쓸모가
-없기 때문이다 — `asset_fair_value` 결측 항목을 배제하지 않고 "평가 필요"
-섹션으로 올리는 것과 같은 원칙이다.
+WARNING/INFO는 리포트 상단에 표시하고 판정을 계속한다. CRITICAL은 잘못된 판정을
+출력하지 않도록 판정 실행 전에 중단한다. 정상적인 결측(`asset_fair_value` 미상)과
+형식 오류(`not-a-number`)는 구별한다.
 
-**exit code(`src/cli.py`)는 비트마스크다**: bit0(`1`)=기대값 대조 불일치,
+**exit code(`src/cli.py`)는 비트마스크다**: bit0(`1`)=기대값 불일치 또는 target_stage 미도달,
 bit1(`2`)=CRITICAL 무결성 문제. 처음에는 exit code를 건드리지 않았다 —
 기대값 대조 실패라는 이미 정의된 의미와 섞이면 CI에서 원인을 구분할 수
 없다는 이유였다. 그러나 CRITICAL이 있어도 exit 0으로 "통과"가 되는 것은
@@ -433,7 +449,7 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
    → **해결.** `applicable_action_types`(candidate_types 전체에서 `third_party_guarantee`
    만 제외)로 범위를 나누고, 범위 밖은 `triage_bands` 대신 `signal_count_bands` 로
    우선순위를 매긴다 — "보증료율이 몇 %면 정상"이라는 근거 없는 숫자를 새로 만드는
-   대신, 이미 있는 다른 신호(`no_consideration`, `role_split_guarantee` 등)의 중첩
+   대신, 이미 있는 다른 신호(`no_verified_consideration`, `role_split_guarantee` 등)의 중첩
    정도로 판단한다. T103은 이제 신호 1개(`role_split_guarantee`)로 `medium`, 완전
    무상 보증인 T101·T107(신호 3~4개)은 여전히 `high` — 실질 차이가 드러난다.
 2. **액면과 기대가치의 혼동.**  `liability_increase_value` 를 룰에서는 "채무 증가의
@@ -443,19 +459,6 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
    필드를 쪼개는 스키마 변경이 필요하다. `collateral_provision` 도 담보설정액(액면)
    기준일 수 있어(샘플 T017) 같은 문제를 잠재적으로 안고 있으나, `undervalue_assessment`
    가 먼저 걸러내(T017은 대가비율 0.8로 3단계에서 제외) 지금은 증상이 드러나지 않는다.
-
-### 과다변제 초과분의 경제적 실질은 아직 계산하지 않는다
-
-`route_out`은 이제 과다변제(T027)를 정확히 배제하지 않는다(§7 판례 기반 대조).
-그러나 `debt_repayment`가 `candidate_types`에 없어서, 라우팅을 벗어난 초과변제는
-"후보 행위 유형 아님"으로 3단계에 닿지 못하고 그대로 배제된다.
-
-원래 초과분(T027의 경우 30,000,000)만 별도로 `value_out`으로 잡아 무상성을 평가해야
-하는데, `economics()`의 세 컴포넌트(`asset_fair_value`/`liability_increase_value`/
-`waived_right_value`) 중 어느 것도 "지급액 대비 채무감소액 초과분"을 표현하지
-못한다. `debt_repayment` 전용 컴포넌트를 추가하는 스키마 변경이 필요하다 —
-`liability_increase_face`/`liability_increase_expected` 분리(위 항목)와 함께
-설계하는 것이 합리적이다. 지금은 "조용히 배제되지 않는다"까지만 고쳤다.
 
 ### 스키마가 아직 표현하지 못하는 것
 
@@ -474,18 +477,10 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
   무결성 검사가 보지만(§7), `economics()` 는 아직 `value_out` 을 상대방별로
   쪼개지 않고 거래 단위로 계산한다 (`multiple_counterparties.value_allocation`
   미구현)
-- **특수관계인 사실 모델이 시행령보다 단순하다.** `parties.csv` 의
-  `relation_type` 은 party 당 단일 값이라, 한 당사자가 동시에 배우자이면서
-  임원인 것처럼 복수 관계를 가질 수 있는 경우를 표현하지 못한다. 또한
-  `affinity`/`collateral_relative` 는 촌수 필드가 없어 시행령 제4조가
-  구별하는 8촌/4촌 범위를 항상 "범위 내"로 가정하고 곧바로 `related` 로
-  확정한다(위 §4 주석 참조). `employee` 는 생계 의존·공동생계 필드가 없어
-  무조건 `not_related` 로 고정되고, 계열회사 관계는 공정거래법상 실질
-  관계 대신 30% 지분율로만 근사하며, 가족 합산 지분·사실상 영향력은
-  계산하지 않는다. 정확히 반영하려면 `relationship_facts` 를 party 당
-  다중 행으로 바꾸고 `kinship_degree`/`shared_livelihood`/`control_basis`/
-  `ownership_group` 같은 사실 필드를 추가하는 스키마 변경이 필요하다 —
-  법률 전문가의 룰별 검토가 선행되어야 하는 별도 작업으로 남겨둔다.
+- **한 당사자의 복수 관계.** 촌수·생계관계·합산지분·사실상 영향력·법인
+  계열회사 확인은 구조화했지만, `relation_type`은 여전히 party 당 단일 값이다.
+  배우자이면서 임원인 경우처럼 서로 다른 유효기간을 가진 복수 관계는
+  `relationship_facts` 다중 행 모델이 필요하다.
 
 ---
 
@@ -518,6 +513,8 @@ pip install -r requirements.txt
 
 ```bash
 python3 src/cli.py
+# 또는 패키지 진입점
+python3 -m src.cli
 ```
 
 ### Windows
@@ -544,12 +541,14 @@ python3 src/cli.py; echo $?          # 통합: 골든파일 대조. 불일치 �
                                      #       (파이프로 tail 하면 '불일치 N건' 줄이 안 보인다)
 
 pip install -r requirements-dev.txt
-pytest                               # 단위: engine.py 함수별. CSV 를 읽지 않는다
+pytest                               # 엔진 함수·CLI 골든 검증기 회귀 테스트
 ```
 
-단위 테스트(`tests/test_engine.py`)는 재귀 함수(`_trace_inbound_chains`)·동적
+엔진 단위 테스트(`tests/test_engine.py`)는 재귀 함수(`_trace_inbound_chains`)·동적
 분류기·`triage_priority` 를 최소 딕셔너리 픽스처로 검증한다 — 샘플 데이터가 바뀌어도
-안 깨진다. 통합 대조가 다른 단계에서 상쇄되어 못 잡는 함수 단위 회귀를 잡는다.
+안 깨진다. `tests/test_cli.py`는 골든파일 검증기의 양방향 ID·정확 필드 비교와
+CRITICAL 입력 중단을 검증한다. 통합 대조가 다른 단계에서 상쇄되어 못 잡는 함수
+단위 회귀를 이 두 테스트 층이 잡는다.
 
 macOS·Linux 에서 Windows 인코딩 회귀는 아래처럼 흉내 낼 수 있다.
 
