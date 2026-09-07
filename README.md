@@ -1,5 +1,7 @@
 # trustee-fds
 
+[![CI](https://github.com/NoahBhang/trustee-fds/actions/workflows/ci.yml/badge.svg)](https://github.com/NoahBhang/trustee-fds/actions/workflows/ci.yml)
+
 파산관재인의 부인권 검토를 지원하는 **설명가능한 조사 대상 선별 시스템** 이다.
 
 법률 판단을 자동화하지 않는다. 관재인이 놓치기 쉬운 거래를 찾아내고, 그 이유와 증거를

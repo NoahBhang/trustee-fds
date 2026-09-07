@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: pytest -v
+
+      - name: Run golden-file integration check
+        # cli.py 의 종료 코드는 비트마스크다: bit0=골든파일 불일치, bit1=CRITICAL
+        # 무결성 문제. 0이 아니면 CI 를 실패시킨다 (README §7 참조).
+        run: python src/cli.py
