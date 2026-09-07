@@ -333,6 +333,12 @@ class Dataset:
 
         transaction_parties 는 list 라 접히지 않지만 같은 링크가 중복될 수 있다
         (중복 자체는 판정을 바꾸지 않아 WARNING).
+
+        transactions 도 self.transactions 자체는 list 라 접히지 않지만, 조회부(
+        tx_by_id 딕셔너리 컴프리헨션, _trace_inbound_chains 의 next())가 서로 다른
+        방식으로 접근한다 — 딕셔너리는 마지막 행을, next()는 첫 행을 고른다.
+        transaction_id 가 중복되면 어느 코드 경로를 타느냐에 따라 다른 행이
+        조용히 선택되어 판정이 흔들린다. cases/parties 와 같은 이유로 CRITICAL.
         """
         issues = []
 
@@ -352,6 +358,15 @@ class Dataset:
                 severity=IssueSeverity.CRITICAL,
                 message="cases.csv 에 중복된 case_id — 뒤 행이 사건 정의를 조용히 덮어씀",
                 details=[{"case_id": c} for c in case_dups],
+            ))
+
+        tx_dups = _dups(self.transactions, lambda r: r["transaction_id"])
+        if tx_dups:
+            issues.append(IntegrityIssue(
+                category=IssueCategory.REFERENTIAL,
+                severity=IssueSeverity.CRITICAL,
+                message="transactions.csv 에 중복된 transaction_id — 조회 방식에 따라 다른 행이 선택되어 판정이 흔들림",
+                details=[{"transaction_id": t} for t in tx_dups],
             ))
 
         party_dups = _dups(self._raw_parties, lambda r: (r["case_id"], r["party_id"]))
@@ -915,14 +930,18 @@ def _trace_inbound_chains(ds, case_id, tx_id, tx_date, ffa, confidence_rank,
     return in_window, delayed
 
 
-def evaluate_funds_circled_back(ds, case_id, tx, rule):
+def evaluate_funds_circled_back(ds, case_id, tx, rule, related_counterparty):
     """
     이 거래로 자금이 흘러들어온(inbound funds_flow) 경로가 있는지, 그리고
     그것이 신호로 인정되는지 판정한다. 링크는 사실, 이 함수는 판단.
 
     max_hops 까지 다단계 연쇄(layering)를 추적한다 — 은닉은 한 번에 끝나지 않는다.
 
-    반환: (circled_back: bool, flags: list[str])
+    related_counterparty: 이 거래(tx)의 legal_counterparty 가 특수관계인으로
+    판정됐는지. 라벨이 "거래 직후 자금이 관계인에게 환류"라고 주장하는 이상,
+    실제로 이 거래의 상대방이 관계인일 때만 성립시킨다 — 단순히 funds_flow
+    링크 하나가 있다는 사실만으로는(상대방이 무관한 제3자여도) 성립시키지
+    않는다.
     """
     ffa = rule.get("fund_flow_analysis")
     if not ffa:
@@ -935,6 +954,9 @@ def evaluate_funds_circled_back(ds, case_id, tx, rule):
 
     in_window, delayed = _trace_inbound_chains(
         ds, case_id, tx_id, td, ffa, confidence_rank, depth=1, visited={tx_id})
+
+    if not related_counterparty:
+        return False, []
 
     flags = []
     if delayed:
@@ -1119,7 +1141,8 @@ def run(ds: Dataset, rules: dict) -> list[Result]:
         # --- 4단계: 정렬 구획 + 신호
         res.reached = "ranking"
         res.candidate = True
-        circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule)
+        related_cp = any(v == "related" for v in cp_v)
+        circled_back, ff_flags = evaluate_funds_circled_back(ds, case_id, tx, rule, related_cp)
         res.flags += ff_flags
         ctx = dict(tx=tx, value_in=vi, value_out=vo, cp_verdicts=cp_v, pd_verdicts=pd_v,
                    counterparties=cps, principal_debtors=pds, days_to_anchor=days_to_anchor,

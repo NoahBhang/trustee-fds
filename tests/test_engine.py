@@ -14,7 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from engine import (                                        # noqa: E402
     Dataset,
+    IssueSeverity,
     _trace_inbound_chains,
+    evaluate_funds_circled_back,
     _classify_affiliate,
     _classify_officer,
     _classify_former_spouse,
@@ -148,6 +150,76 @@ def test_trace_link_type_filter():
     links[0]["link_type"] = "same_asset"          # funds_flow 아님
     in_w, delayed = _trace(txs, links, "B", "2025-01-10")
     assert in_w == [] and delayed == []
+
+
+# ------------------------------------------------------ evaluate_funds_circled_back
+# 라벨이 "거래 직후 자금이 관계인에게 환류"라고 주장하므로, 상대방이 실제로
+# 특수관계인일 때만 성립해야 한다 — funds_flow 링크 하나만으로 무관한 제3자
+# 간 거래에도 "환류"를 붙이면 안 된다 (코덱스 리뷰에서 지적된 오탐).
+
+def test_circled_back_true_when_counterparty_related():
+    txs, links = _linear_chain(("A", "2025-01-01"), ("B", "2025-01-10"))
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
+    rule = {"fund_flow_analysis": FFA}
+    circled, flags = evaluate_funds_circled_back(
+        ds, "C1", txs[1], rule, related_counterparty=True)
+    assert circled is True
+    assert flags == []
+
+
+def test_circled_back_false_when_counterparty_unrelated():
+    # A -> B 로 funds_flow 링크가 있어도, B 의 legal_counterparty 가 무관한
+    # 제3자면 "관계인에게 환류"라는 결론을 세우지 않는다.
+    txs, links = _linear_chain(("A", "2025-01-01"), ("B", "2025-01-10"))
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
+    rule = {"fund_flow_analysis": FFA}
+    circled, flags = evaluate_funds_circled_back(
+        ds, "C1", txs[1], rule, related_counterparty=False)
+    assert circled is False
+    assert flags == []
+
+
+def test_circled_back_multihop_flag_still_gated_by_relatedness():
+    txs, links = _linear_chain(
+        ("A", "2025-01-01"), ("B", "2025-01-05"), ("C", "2025-01-10"))
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[], tx_links=links)
+    rule = {"fund_flow_analysis": FFA}
+    circled, flags = evaluate_funds_circled_back(
+        ds, "C1", txs[2], rule, related_counterparty=True)
+    assert circled is True
+    assert "funds_circled_back_multihop" in flags
+
+    circled, flags = evaluate_funds_circled_back(
+        ds, "C1", txs[2], rule, related_counterparty=False)
+    assert circled is False
+    assert flags == []
+
+
+# ----------------------------------------------------------- _check_duplicate_keys
+# transactions.csv 의 transaction_id 중복은 조회부에 따라 다른 행이 조용히
+# 선택된다(딕셔너리 컴프리헨션은 마지막 행, next()는 첫 행) — cases/parties 와
+# 같은 이유로 CRITICAL 이어야 한다 (코덱스 리뷰에서 지적된 무결성 공백).
+
+def test_duplicate_transaction_id_is_critical():
+    txs = [
+        {"transaction_id": "T1", "case_id": "C1", "transaction_date": "2025-01-01"},
+        {"transaction_id": "T1", "case_id": "C1", "transaction_date": "2025-02-01"},
+    ]
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[])
+    issues = ds._check_duplicate_keys()
+    hits = [i for i in issues if "transaction_id" in i.message]
+    assert len(hits) == 1
+    assert hits[0].severity == IssueSeverity.CRITICAL
+
+
+def test_no_duplicate_transaction_id_raises_nothing():
+    txs = [
+        {"transaction_id": "T1", "case_id": "C1", "transaction_date": "2025-01-01"},
+        {"transaction_id": "T2", "case_id": "C1", "transaction_date": "2025-02-01"},
+    ]
+    ds = Dataset(cases={}, transactions=txs, parties={}, links=[])
+    issues = ds._check_duplicate_keys()
+    assert not any("transaction_id" in i.message for i in issues)
 
 
 # --------------------------------------------------------------- _classify_affiliate

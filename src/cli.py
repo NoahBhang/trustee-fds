@@ -187,14 +187,27 @@ def main():
 
     # 무결성 검사 결과 출력 (리포트 앞에)
     report_integrity(ds)
-    
+    critical = [i for i in ds.integrity_issues if i.severity == IssueSeverity.CRITICAL]
+
     # 본 리포트
     results = run(ds, rules)
     report(ds, rules, results)
-    
+
     # 기대값 대조
     m, u = validate(results)
-    return 1 if m else 0
+
+    if critical:
+        print("=" * 74)
+        print(f"⚠ CRITICAL 무결성 문제 {len(critical)}건 — 위 결과의 신뢰도가 보장되지 않는다.")
+        print("  사건을 분리해 재검토하거나, 원인을 해소한 뒤 다시 실행할 것.")
+        print("=" * 74)
+
+    # 종료 코드는 비트마스크다: bit0(1)=기대값 불일치, bit1(2)=CRITICAL 무결성 문제.
+    # 예전에는 CRITICAL 이 있어도 exit 0 이었다 — "리포트에는 나오지만 자동화는
+    # 통과로 본다"는 fail-open 이 법률 조사 도구에는 맞지 않는다(코덱스 리뷰).
+    # 다만 원인 구분(§7)은 유지해야 하므로 1로 뭉개지 않고 비트를 분리한다 —
+    # CI 는 `code & 1`(골든파일) 과 `code & 2`(무결성) 를 따로 검사할 수 있다.
+    return (1 if m else 0) | (2 if critical else 0)
 
 
 if __name__ == "__main__":

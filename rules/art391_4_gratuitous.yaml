@@ -167,9 +167,16 @@ economic_substance:
 
   value_in:
     components:
-      - verified_cash_received      # 실제 입금이 확인된 대가
-      - verified_debt_reduction     # 확인된 채무 감소
-      - realizable_direct_benefit   # 채무자에게 직접 귀속된 실현 가능한 이익
+      - verified_cash_received      # 실제 입금이 확인된 대가 — economics()의 cash
+      - verified_debt_reduction     # 확인된 채무 감소 — [미구현] economics()는 이 항목을
+                                     # 계산하지 않는다. debt_repayment 가 candidate_types
+                                     # 에 없어 economics() 자체에 도달하지 못하므로 지금은
+                                     # 증상이 드러나지 않지만, sale 등 다른 행위 유형에서
+                                     # 대가가 채무 감면으로 주어지는 경우까지 포함해 스키마
+                                     # 설계가 필요하다. README §8 "과다변제 초과분의 경제적
+                                     # 실질은 아직 계산하지 않는다" 참조 — 여기서 구현하지
+                                     # 않는다.
+      - realizable_direct_benefit   # 채무자에게 직접 귀속된 실현 가능한 이익 — economics()의 benefit
     excluded_from_value_in:         # 판례상 '직접적·현실적 이익'으로 보기 어려운 것
       - "그룹 전체의 존속 기대"
       - "가족회사 유지에 따른 간접 이익"
@@ -305,9 +312,12 @@ priority_signals:
     label: "주채무자가 특수관계인 — 조사 신호일 뿐 소급기간을 바꾸지 않음"
   - id: funds_circled_back
     when: >
-      transaction_links 에 이 거래를 to_transaction_id 로 하는 funds_flow 링크가
-      있고, confidence >= fund_flow_analysis.min_confidence 이며,
-      from 거래일과의 간격이 proximity_window_days 이내
+      이 거래의 legal_counterparty 가 특수관계인(related)이고, transaction_links 에
+      이 거래를 to_transaction_id 로 하는 funds_flow 링크가 있고, confidence >=
+      fund_flow_analysis.min_confidence 이며, from 거래일과의 간격이
+      proximity_window_days 이내(다단계 연쇄는 각 홉 독립 적용, engine.py
+      evaluate_funds_circled_back 참조). 상대방 특수관계 여부를 게이팅하지 않으면
+      무관한 제3자 간 funds_flow 링크에도 "관계인에게 환류" 라벨이 붙는다.
     label: "거래 직후 자금이 관계인에게 환류"
   - id: non_cash_waiver
     when: "right_waiver_type != null"

@@ -367,16 +367,22 @@ T015·T014·T028·T017이 그 경계다.
 
 검사 목록(`Dataset._check_*`): `party_id` 참조 · `legal_counterparty` 커버리지
 (`action_filter.unilateral_acts` 는 제외) · 교차 사건 검증 · 고아 거래 링크 ·
-중복 키(`cases`/`parties`/`transaction_parties`) · `case_id` 커버리지 ·
-참조되지 않는 당사자(`self` 제외, INFO) · `share_ratio` 합 · `transaction_links`
-참조·시간순·자기참조.
+중복 키(`cases`/`parties`/`transactions`/`transaction_parties`) · `case_id`
+커버리지 · 참조되지 않는 당사자(`self` 제외, INFO) · `share_ratio` 합 ·
+`transaction_links` 참조·시간순·자기참조.
 
 발견된 문제는 예외를 던지지 않고 리포트 상단에 별도 섹션으로 표시한다.
 불완전한 실제 사건 데이터를 이유로 리포트 전체를 막으면 도구로서 쓸모가
 없기 때문이다 — `asset_fair_value` 결측 항목을 배제하지 않고 "평가 필요"
-섹션으로 올리는 것과 같은 원칙이다. exit code 는 건드리지 않는다;
-기대값 대조 실패라는 이미 정의된 의미와 섞이면 CI 에서 원인을 구분할 수
-없다.
+섹션으로 올리는 것과 같은 원칙이다.
+
+**exit code(`src/cli.py`)는 비트마스크다**: bit0(`1`)=기대값 대조 불일치,
+bit1(`2`)=CRITICAL 무결성 문제. 처음에는 exit code를 건드리지 않았다 —
+기대값 대조 실패라는 이미 정의된 의미와 섞이면 CI에서 원인을 구분할 수
+없다는 이유였다. 그러나 CRITICAL이 있어도 exit 0으로 "통과"가 되는 것은
+법률 조사 도구에는 fail-open이 맞지 않는다는 지적(코덱스 리뷰)이 옳았다.
+원인 구분은 비트를 나눠 그대로 유지한다 — CI는 `code & 1`(골든파일),
+`code & 2`(무결성)를 따로 검사할 수 있다.
 
 `parties` 는 `(case_id, party_id)` 복합 키로 색인한다. 단순 `party_id` 키였다면
 CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했을 것이다.
@@ -466,6 +472,18 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
   무결성 검사가 보지만(§7), `economics()` 는 아직 `value_out` 을 상대방별로
   쪼개지 않고 거래 단위로 계산한다 (`multiple_counterparties.value_allocation`
   미구현)
+- **특수관계인 사실 모델이 시행령보다 단순하다.** `parties.csv` 의
+  `relation_type` 은 party 당 단일 값이라, 한 당사자가 동시에 배우자이면서
+  임원인 것처럼 복수 관계를 가질 수 있는 경우를 표현하지 못한다. 또한
+  `affinity`/`collateral_relative` 는 촌수 필드가 없어 시행령 제4조가
+  구별하는 8촌/4촌 범위를 항상 "범위 내"로 가정하고 곧바로 `related` 로
+  확정한다(위 §4 주석 참조). `employee` 는 생계 의존·공동생계 필드가 없어
+  무조건 `not_related` 로 고정되고, 계열회사 관계는 공정거래법상 실질
+  관계 대신 30% 지분율로만 근사하며, 가족 합산 지분·사실상 영향력은
+  계산하지 않는다. 정확히 반영하려면 `relationship_facts` 를 party 당
+  다중 행으로 바꾸고 `kinship_degree`/`shared_livelihood`/`control_basis`/
+  `ownership_group` 같은 사실 필드를 추가하는 스키마 변경이 필요하다 —
+  법률 전문가의 룰별 검토가 선행되어야 하는 별도 작업으로 남겨둔다.
 
 ---
 
