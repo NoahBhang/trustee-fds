@@ -518,6 +518,20 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
 
 ## 10. 실행
 
+### Streamlit 로컬 화면 (추가)
+
+코어 엔진을 호출하는 샘플/CSV 분석 화면과 로컬 실행기를 추가했다.
+**Python 3.12 기준 설치, Windows/macOS 실행, USB 오프라인 소스 배포 절차와
+미검증 항목은 [docs/ONPREM.md](docs/ONPREM.md)를 참조한다.**
+이는 Python이 필요한 소스 배포 구성이며 독립 EXE/APP 완성본은 아니다.
+
+```bash
+python -m pip install -r requirements-ui.txt
+python -m src.onprem
+```
+
+기존 CLI 실행 방법은 아래와 같다.
+
 **Python 3.9 이상** 이 필요하다(`from __future__ import annotations` 로 `X | None`
 타입 표기를 쓰므로 그 이하에서는 동작하지 않는다).
 

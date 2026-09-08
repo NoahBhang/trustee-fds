@@ -31,3 +31,19 @@ jobs:
         # cli.py: 0=통과, 1=골든/target_stage 실패, 2=CRITICAL 입력 오류.
         # CRITICAL이면 골든 대조 전에 종료한다 (README §7 참조).
         run: python src/cli.py
+
+  ui-onprem:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt -r requirements-ui.txt
+      - run: python -m pytest -q
+      - run: python -m src.onprem --check-only
+      - run: python src/cli.py
