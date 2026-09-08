@@ -25,4 +25,3 @@ def test_changed_input_clears_previous_results():
     assert not app.exception
     assert not app.metric
     assert app.sidebar.button[0].disabled
-
