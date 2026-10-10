@@ -48,9 +48,9 @@ class UIServiceTests(unittest.TestCase):
 
     def test_cp949_and_crlf_upload_match_utf8_results(self):
         """한국어 Windows Excel 저장본(CP949·CRLF)도 UTF-8 원본과 같은 결과를 낸다."""
-        # 샘플의 '—'처럼 CP949에 없는 문자는 Excel처럼 대체한 뒤 양쪽을 비교한다.
-        texts = {name: content.decode('utf-8').encode('cp949', 'replace').decode('cp949')
-                 for name, content in sample_files().items()}
+        # 샘플은 CP949로 표현되는 문자만 쓴다. '—'(U+2014)처럼 CP949에 없는 문자는 Excel 저장 시
+        # '?'로 바뀌어 사용자에게 깨진 자료처럼 보이므로, 아래 엄격한 encode가 실패하면 샘플을 고친다.
+        texts = {name: content.decode('utf-8') for name, content in sample_files().items()}
         utf8 = {name: text.encode('utf-8') for name, text in texts.items()}
         cp949 = {name: text.encode('cp949').replace(b'\n', b'\r\n') for name, text in texts.items()}
         self.assertNotEqual(cp949['parties.csv'], utf8['parties.csv'].replace(b'\n', b'\r\n'))

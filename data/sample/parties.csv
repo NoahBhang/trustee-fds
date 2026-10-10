@@ -4,9 +4,9 @@ P-001,CASE-001,배우자,individual,spouse,2011-04-02,,혼인관계증명서,가
 P-002,CASE-001,자녀,individual,lineal_descendant,2013-09-18,,가족관계증명서,가족관계등록부,,,,1,,,,,,
 P-003,CASE-001,형제 1,individual,sibling,,,가족관계증명서,가족관계등록부,,,,2,,,,,,
 P-004,CASE-001,형제 2,individual,sibling,,,가족관계증명서,가족관계등록부,,,,2,,,,,,
-P-005,CASE-001,처남,individual,affinity,2011-04-02,,혼인관계증명서,가족관계등록부,,,,2,,,,,,2촌 인척 — 시행령상 4촌 이내
+P-005,CASE-001,처남,individual,affinity,2011-04-02,,혼인관계증명서,가족관계등록부,,,,2,,,,,,2촌 인척 - 시행령상 4촌 이내
 P-006,CASE-001,조카,individual,collateral_relative,,,가족관계증명서,가족관계등록부,,,,3,,,,,,
-P-007,CASE-001,전 배우자,individual,former_spouse,2011-04-02,2025-03-08,협의이혼 확인,가족관계등록부,,,,,,,,,,★ P-001과 동일인 여부 미확정(사실관계 조사 필요 — 룰로 판정 안 함). post_divorce_dependency 미상 → 이혼 후 거래는 verify
+P-007,CASE-001,전 배우자,individual,former_spouse,2011-04-02,2025-03-08,협의이혼 확인,가족관계등록부,,,,,,,,,,★ P-001과 동일인 여부 미확정(사실관계 조사 필요 - 룰로 판정 안 함). post_divorce_dependency 미상 → 이혼 후 거래는 verify
 P-010,CASE-001,지인,individual,none,,,,진술,,,,,,,,,,
 P-011,CASE-001,제3자 매수인,individual,none,,,,매매계약서,,,,,,,,,,
 C-002,CASE-001,거래처 A,corporation,none,,,,사업자등록,,,,,,,,,,
@@ -21,4 +21,4 @@ CORP-AFF,CASE-002,계열회사,corporation,affiliate,2019-06-01,,지분 62% 보�
 CORP-OTHER,CASE-002,비계열 거래처,corporation,none,,,,법인등기부,,,,,,,,,,
 C-BANK2,CASE-002,은행 2,corporation,none,,,,보증계약서,,,,,,,,,,
 C-BANK3,CASE-002,은행 3,corporation,none,,,,보증계약서,,,,,,,,,,
-C-PAYROLL,CASE-002,임직원(집계),group,none,,,,급여대장,,,,,,,,,,개별 당사자 아님 — 집계 행
+C-PAYROLL,CASE-002,임직원(집계),group,none,,,,급여대장,,,,,,,,,,개별 당사자 아님 - 집계 행
