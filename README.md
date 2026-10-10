@@ -526,9 +526,11 @@ CASE-001 거래에 CASE-002 당사자가 잘못 연결돼도 조용히 통과했
 이는 Python이 필요한 소스 배포 구성이며 독립 EXE/APP 완성본은 아니다.
 
 ```bash
-python -m pip install -r requirements-ui.txt
+python -m pip install -r requirements-ui.txt -c constraints-ui.txt
 python -m src.onprem
 ```
+
+`constraints-ui.txt` 는 배포본마다 같은 Streamlit·의존성 버전이 들어가도록 고정한다.
 
 기존 CLI 실행 방법은 아래와 같다.
 
@@ -617,6 +619,15 @@ python src/cli.py
 조문에서 나오는 값(소급기간, 기준 사건, 행위 유형 목록, 임계값, 정렬 구획)은
 전부 YAML 에서 읽는다. 술어의 *판단 로직* 만 코드에 있고, 그 존재 여부는
 룰이 강제한다. 완전한 데이터 주도는 아니지만, 어긋남이 조용히 넘어가지는 않는다.
+
+`route_out` 도 같은 방식이다. 엔진은 각 항목의 `action_type` 키로 라우팅 규칙을
+고르고, `when` 은 사람이 읽는 조건 설명으로 남긴다. `load_rules()` 는 두 값이
+어긋나거나 `action_type` 이 빠지거나 중복되면 로드를 거부한다.
+
+코드는 세 파일로 나뉜다. `src/dataset.py` 는 CSV 로딩과 무결성 검사,
+`src/relations.py` 는 1단계 특수관계인 분류, `src/engine.py` 는 룰 로딩과
+시간 창·경제적 실질·신호·정렬 파이프라인(`run()`)을 맡는다. 기존 import 경로
+(`from engine import ...`)는 그대로 쓸 수 있다.
 
 ---
 

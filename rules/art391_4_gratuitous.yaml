@@ -117,8 +117,11 @@ action_filter:
     - debt_repayment                # 정상 변제는 route_out, 초과분만 3단계에서 검토
 
   # 다른 조문으로 라우팅. 조용히 버리지 않고 사유를 남긴다.
+  # 엔진은 action_type 키로 항목을 고른다. when 은 사람이 읽는 조건 설명이며,
+  # load_rules() 가 두 값이 어긋나지 않는지 확인한다.
   route_out:
-    - when: 'action_type == "debt_repayment" and abs(consideration_paid - liability_reduction) / consideration_paid <= tolerance'
+    - action_type: debt_repayment
+      when: 'action_type == "debt_repayment" and abs(consideration_paid - liability_reduction) / consideration_paid <= tolerance'
       to: art391-1/2/3
       reason: "자기 채무의 정상 변제. 순재산 중립 → 무상부인 대상 아님. 편파부인 별도 검토."
       tolerance: 0.02
@@ -131,10 +134,12 @@ action_filter:
         비교해 실행한다 — 과거에는 action_type 문자열만 매칭해 항상 라우팅됐다
         (T027 로 재현·수정). T027은 이제 초과분 계산을 검증하기 위해
         target_stage=economic까지 도달한다.
-    - when: action_type == "inheritance_renunciation"
+    - action_type: inheritance_renunciation
+      when: action_type == "inheritance_renunciation"
       to: excluded
       reason: "상속포기는 인적 결단의 성격. 일반적으로 재산권을 목적으로 한 행위로 보지 않음."
-    - when: action_type == "divorce_property_division"
+    - action_type: divorce_property_division
+      when: action_type == "divorce_property_division"
       to: manual_review
       reason: "청산·부양적 기능. 상당성을 벗어난 초과부분만 문제될 수 있음."
 

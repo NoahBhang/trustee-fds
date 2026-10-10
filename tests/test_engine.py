@@ -25,6 +25,7 @@ from engine import (                                        # noqa: E402
     _classify_officer,
     _classify_former_spouse,
     _debt_repayment_within_tolerance,
+    _check_route_out,
     classify_relation,
     economics,
     PREDICATES,
@@ -357,6 +358,22 @@ def test_debt_repayment_requires_configured_tolerance():
         assert exc.args == ("tolerance",)
     else:
         raise AssertionError("법률·운영 임계값을 코드 기본값으로 대체하면 안 된다")
+
+
+# ------------------------------------------------------------------ route_out 검증
+
+def test_route_out_rejects_missing_mismatched_or_duplicate_action_type():
+    ok = {"action_type": "debt_repayment", "when": 'action_type == "debt_repayment"'}
+    _check_route_out([ok])
+    for bad in ([{"when": 'action_type == "debt_repayment"'}],
+                [{"action_type": "debt_repayment", "when": 'action_type == "gift"'}],
+                [ok, dict(ok)]):
+        try:
+            _check_route_out(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"잘못된 route_out을 받아들였다: {bad}")
 
 
 # ------------------------------------------------------------------ triage_priority
