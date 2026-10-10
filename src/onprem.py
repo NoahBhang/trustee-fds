@@ -3,10 +3,25 @@ import argparse
 import importlib.util
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def port_available(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        # macOS·Linux: 서버(uvicorn)처럼 SO_REUSEADDR를 켜야 Ctrl+C 직후 TIME_WAIT를
+        # 사용 중으로 오인하지 않는다. Windows에서는 이 옵션이 실행 중인 포트에도
+        # bind를 허용하므로 켜지 않는다.
+        if os.name != "nt":
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 def main():
@@ -26,6 +41,10 @@ def main():
     if args.check_only:
         print(f"OK: transactions={len(results)}, candidates={sum(r.candidate for r in results)}")
         return 0
+    if not port_available(args.port):
+        print(f"포트 {args.port}이(가) 이미 사용 중입니다. 이미 실행 중인 창이 있는지 확인하거나 "
+              f"--port {args.port + 1} 로 실행해 주세요.", file=sys.stderr)
+        return 2
     print(f"브라우저에서 http://127.0.0.1:{args.port} 를 여세요. 종료: Ctrl+C", flush=True)
     env = dict(os.environ, STREAMLIT_BROWSER_GATHER_USAGE_STATS="false")
     command = [sys.executable, "-m", "streamlit", "run", str(ROOT / "streamlit_app.py"),

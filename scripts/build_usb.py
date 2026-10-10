@@ -14,6 +14,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def git_state():
+    """배포본이 어느 커밋에서 나왔는지 기록한다. git이 없으면(ZIP 소스 등) None."""
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+                                capture_output=True, text=True).stdout.strip()
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, check=True,
+                                capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
+    return commit, bool(status.strip())
+
+
 def main():
     label = f"trustee-fds-{platform.system()}-{platform.machine()}-py{sys.version_info.major}{sys.version_info.minor}"
     destination = ROOT / "dist"
@@ -23,17 +35,19 @@ def main():
         package.mkdir()
         for folder in ("src", "rules", "docs", "data/sample"):
             shutil.copytree(ROOT / folder, package / folder, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ("streamlit_app.py", "requirements.txt", "requirements-ui.txt", "start-macos.command", "start-windows.cmd", "README.md", "LICENSE", "NOTICE"):
+        for name in ("streamlit_app.py", "requirements.txt", "requirements-ui.txt", "constraints-ui.txt", "start-macos.command", "start-windows.cmd", "README.md", "LICENSE", "NOTICE"):
             shutil.copy2(ROOT / name, package / name)
         subprocess.run([sys.executable, "-m", "pip", "download", "--only-binary=:all:",
-                        "-r", str(ROOT / "requirements-ui.txt"), "-d", str(package / "wheelhouse")], check=True)
+                        "-r", str(ROOT / "requirements-ui.txt"), "-c", str(ROOT / "constraints-ui.txt"),
+                        "-d", str(package / "wheelhouse")], check=True)
+        commit, dirty = git_state()
         (package / "BUILD.json").write_text(
             json.dumps({
                 "platform": platform.platform(),
                 "python": sys.version,
-                "source": "ZIP source folder",
-                "commit": None,
-                "working_tree_dirty": None,
+                "source": "git checkout" if commit else "ZIP source folder",
+                "commit": commit,
+                "working_tree_dirty": dirty,
             }, indent=2),
             encoding="utf-8",
         )

@@ -1,2 +1,3 @@
 -r requirements.txt
-streamlit>=1.40,<2
+# width="stretch"(st.dataframe)는 1.49부터 지원한다.
+streamlit>=1.49,<2

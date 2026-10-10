@@ -1,0 +1,43 @@
+# 배포 재현용 버전 고정 (2026-10-10, Python 3.12, macOS arm64에서 확인).
+# 설치: pip install -r requirements-ui.txt -c constraints-ui.txt
+# 갱신: 깨끗한 가상환경에 requirements-ui.txt만 설치한 뒤 pip freeze 결과로 교체하고,
+#       아래 Windows·Linux 전용 항목은 수동으로 유지한다(Mac에서는 freeze에 나오지 않음).
+altair==6.3.0
+anyio==4.15.1
+attrs==26.1.0
+certifi==2026.7.22
+charset-normalizer==3.5.2
+click==8.5.0
+h11==0.16.0
+httptools==0.9.0
+idna==3.20
+itsdangerous==2.2.0
+Jinja2==3.1.6
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+MarkupSafe==3.0.4
+narwhals==2.27.1
+numpy==2.5.3
+packaging==26.3
+pandas==3.0.6
+pillow==12.3.0
+protobuf==7.36.2
+pyarrow==25.0.1
+pydeck==0.9.3
+python-dateutil==2.9.0.post0
+python-multipart==0.0.32
+PyYAML==6.0.3
+referencing==0.37.0
+requests==2.34.2
+rpds-py==2026.9.1
+six==1.17.0
+starlette==1.7.0
+streamlit==1.65.0
+toml==0.10.2
+typing_extensions==4.16.0
+urllib3==2.8.0
+uvicorn==0.54.0
+websockets==17.2
+# Windows·Linux 전용 (pandas: tzdata; sys_platform == win32 / streamlit: watchdog; platform_system != Darwin)
+tzdata==2026.5
+watchdog==6.0.0

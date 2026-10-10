@@ -28,6 +28,16 @@ def fingerprint(files):
     return digest.hexdigest()
 
 
+def _decode(name, content):
+    """UTF-8(BOM 포함)을 우선하고, 한국어 Windows Excel 기본 저장 형식(CP949)도 받는다."""
+    for encoding in ("utf-8-sig", "cp949"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"{name}: 인코딩을 읽을 수 없습니다. Excel에서 'CSV UTF-8'로 다시 저장해 주세요.")
+
+
 def analyze(files):
     missing = set(REQUIRED) - files.keys()
     if missing:
@@ -41,7 +51,7 @@ def analyze(files):
         target = root / "data/sample"
         target.mkdir(parents=True)
         for name, content in files.items():
-            text = content.decode("utf-8-sig")
+            text = _decode(name, content)
             reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
             headers = reader.fieldnames or []
             template = (ROOT / "data/sample" / name).read_text(encoding="utf-8").splitlines()[0]
@@ -53,7 +63,8 @@ def analyze(files):
                 raise ValueError(f"{name}: 열 개수가 맞지 않는 행이 있습니다.")
             if name in ("cases.csv", "transactions.csv") and not rows:
                 raise ValueError(f"{name}: 데이터가 비어 있습니다.")
-            (target / name).write_text(text, encoding="utf-8")
+            # newline="" — Windows에서 CRLF가 CRCRLF로 바뀌지 않도록 원문 줄바꿈을 유지한다.
+            (target / name).write_text(text, encoding="utf-8", newline="")
         ds = Dataset.load(root, unilateral_acts=rules["art391-4-gratuitous"]["action_filter"].get("unilateral_acts", []))
     blocked = any(i.severity == IssueSeverity.CRITICAL for i in ds.integrity_issues)
     results = [] if blocked else run(ds, rules)

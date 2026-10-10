@@ -20,7 +20,7 @@ with st.sidebar:
         files = sample_files()
         st.caption("저장소의 합성 샘플 34건으로 실행합니다.")
     else:
-        st.caption("UTF-8 CSV를 사용하세요. 열 이름은 샘플과 같아야 합니다.")
+        st.caption("UTF-8 또는 Excel 기본(CP949) CSV를 사용하세요. 열 이름은 샘플과 같아야 합니다.")
         for name in (*REQUIRED, OPTIONAL):
             item = st.file_uploader(name + (" (선택)" if name == OPTIONAL else " (필수)"), type=["csv"], key=name)
             if item is not None:
@@ -78,7 +78,7 @@ for title, items in [("평가 필요", unvalued), ("평가 완료 — 순출연 
                      ("후보 제외 거래", [r for r in visible if not r.candidate])]:
     st.subheader(title)
     if items:
-        st.dataframe(rows(items), hide_index=True, use_container_width=True)
+        st.dataframe(rows(items), hide_index=True, width="stretch")
     else:
         st.caption("해당 항목이 없습니다.")
 
