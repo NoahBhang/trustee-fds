@@ -63,8 +63,9 @@ def analyze(files):
                 raise ValueError(f"{name}: 열 개수가 맞지 않는 행이 있습니다.")
             if name in ("cases.csv", "transactions.csv") and not rows:
                 raise ValueError(f"{name}: 데이터가 비어 있습니다.")
-            # newline="" — Windows에서 CRLF가 CRCRLF로 바뀌지 않도록 원문 줄바꿈을 유지한다.
-            (target / name).write_text(text, encoding="utf-8", newline="")
+            # 바이트로 쓴다 — Windows에서 CRLF가 CRCRLF로 바뀌지 않도록 원문 줄바꿈을 유지한다.
+            # (write_text(newline=)는 Python 3.10+이라 3.9 지원 범위에서 쓰지 않는다.)
+            (target / name).write_bytes(text.encode("utf-8"))
         ds = Dataset.load(root, unilateral_acts=rules["art391-4-gratuitous"]["action_filter"].get("unilateral_acts", []))
     blocked = any(i.severity == IssueSeverity.CRITICAL for i in ds.integrity_issues)
     results = [] if blocked else run(ds, rules)
