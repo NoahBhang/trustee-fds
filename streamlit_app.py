@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 import streamlit as st
 
+from src import ui_view as view
 from src.engine import partition
 from src.ui_service import REQUIRED, OPTIONAL, analyze, export_json, fingerprint, sample_files
 
@@ -68,32 +69,82 @@ for col, label, value in zip(cols, ["검토 거래", "조사 후보", "평가 �
     col.metric(label, value)
 st.caption("평가 필요 항목은 합계에서 제외됩니다. 순출연 추정액은 회수확률을 반영한 기대값이 아닙니다.")
 
-def rows(items):
-    return [{"거래": r.tx_id, "사건": txs[r.tx_id]["case_id"], "우선순위": r.priority,
-             "순출연 추정액": None if r.value_out is None else r.value_out-r.value_in,
-             "대가비율": r.ratio, "신호": ", ".join(r.signals), "플래그": ", ".join(r.flags),
-             "제외 사유": r.drop_reason} for r in items]
+rule = rules["art391-4-gratuitous"]
 
-for title, items in [("평가 필요", unvalued), ("평가 완료 — 순출연 추정액 순", valued),
-                     ("후보 제외 거래", [r for r in visible if not r.candidate])]:
+
+def rows(items):
+    return [{"거래": r.tx_id, "사건": txs[r.tx_id]["case_id"],
+             "행위 유형": view.action_label(txs[r.tx_id]["action_type"]),
+             "우선순위": view.priority_label(r),
+             "순출연 추정액": "평가 필요" if r.value_out is None else view.won(r.value_out-r.value_in),
+             "대가비율": view.percent(r.ratio), "조사 이유": " · ".join(view.signal_labels(r.signals, rule)),
+             "참고 사항": " · ".join(view.flag_labels(r.flags)),
+             "제외 사유": view.drop_reason_label(r)} for r in items]
+
+
+for title, items, drop in [("평가 필요", unvalued, ["제외 사유"]),
+                           ("평가 완료 — 순출연 추정액 순", valued, ["제외 사유"]),
+                           ("후보 제외 거래", [r for r in visible if not r.candidate],
+                            ["우선순위", "순출연 추정액", "대가비율", "조사 이유"])]:
     st.subheader(title)
     if items:
-        st.dataframe(rows(items), hide_index=True, width="stretch")
+        st.dataframe([{k: v for k, v in row.items() if k not in drop} for row in rows(items)],
+                     hide_index=True, width="stretch")
     else:
         st.caption("해당 항목이 없습니다.")
 
 if visible:
-    selected = st.selectbox("거래 상세", [r.tx_id for r in visible])
+    st.subheader("거래 상세")
+    selected = st.selectbox("거래 선택", [r.tx_id for r in visible],
+                            format_func=lambda t: f"{t} · {view.action_label(txs[t]['action_type'])} · {txs[t]['transaction_date']}")
     result = next(r for r in visible if r.tx_id == selected)
     tx = txs[selected]
-    st.write("입력 사실 및 출처")
-    st.json(tx)
-    if "debt_repayment_excess_isolated" in result.flags and result.value_out is not None and result.value_out-result.value_in > 0:
-        st.info(f"과다변제 산식: 실제 지급액 {tx.get('consideration_paid')}원 − 실제 채무 감소액 {tx.get('liability_reduction')}원 → 초과분 {result.value_out-result.value_in:,.0f}원. 분석 결과의 Value In=0은 채무 감소가 없었다는 뜻이 아닙니다.")
-    st.write("엔진 결과 — 신호·미확인 사항·제외 사유")
-    st.json(asdict(result))
-    with st.expander("연결 당사자와 거래 링크"):
-        st.json({"당사자": [dict(link, facts=ds.parties.get((tx['case_id'], link['party_id']))) for link in ds.links if link['transaction_id'] == selected],
-                 "거래 링크": [link for link in ds.tx_links if selected in (link['from_transaction_id'], link['to_transaction_id'])]})
+    case = ds.cases.get(tx["case_id"], {})
+    with st.container(border=True):
+        st.markdown(f"#### {selected} · {view.action_label(tx['action_type'])} · {tx['transaction_date']}")
+        st.write(view.anchor_sentence(tx, case, rule))
+        st.write(f"상대방: {view.counterparty_text(ds, tx, result)}")
+        if result.candidate:
+            st.markdown(f"**조사 후보 · 우선순위 {view.priority_label(result)}**")
+        else:
+            st.markdown(f"**후보 제외 — {view.drop_reason_label(result)}**")
+
+        if result.candidate:
+            st.markdown("##### 왜 조사 대상인가")
+            st.markdown("\n".join(f"- {s}" for s in view.signal_labels(result.signals, rule)) or "- 관측된 신호 없음")
+            st.markdown("##### 금액")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("나간 가치 (Value Out)", "산출 불가" if result.value_out is None else view.won(result.value_out))
+            c2.metric("확인된 대가 (Value In)", view.won(result.value_in))
+            c3.metric("순출연 추정액", "평가 필요" if result.value_out is None else view.won(result.value_out-result.value_in))
+            st.caption(f"대가비율 {view.percent(result.ratio)} — 조사 우선순위 지표이며 법정 기준이 아닙니다. "
+                       "계약서상 대가는 실제 지급이 확인된 금액만 Value In에 들어갑니다.")
+            if "debt_repayment_excess_isolated" in result.flags and result.value_out is not None and result.value_out-result.value_in > 0:
+                st.info(f"과다변제 산식: 실제 지급액 {view.won(tx.get('consideration_paid'))} − 실제 채무 감소액 {view.won(tx.get('liability_reduction'))} → 초과분 {result.value_out-result.value_in:,.0f}원. 분석 결과의 Value In=0은 채무 감소가 없었다는 뜻이 아닙니다.")
+            if result.lookback_months:
+                st.write(f"적용 검토 조문: 채무자회생법 제391조 제4호 · 소급기간 {result.lookback_months}개월 ({view.lookback_basis(result, rule)})")
+            st.markdown("##### ⚠ 확인 필요")
+            st.markdown("\n".join(f"- {t}" for t in view.verification_items(tx, rule)))
+        if result.flags:
+            st.markdown("##### 참고 사항")
+            st.markdown("\n".join(f"- {f}" for f in view.flag_labels(result.flags)))
+
+        st.markdown("##### 입력 사실과 출처")
+        facts = view.facts_table(tx)
+        # 기본 높이는 10행까지라 비고·출처가 표 안 스크롤에 숨는다. 행 수만큼 펼친다(행 35px).
+        st.dataframe(facts, hide_index=True, width="stretch", height=(len(facts) + 1) * 35 + 3)
+        st.markdown("##### 관련 당사자")
+        parties = view.party_rows(ds, tx)
+        if parties:
+            st.dataframe(parties, hide_index=True, width="stretch")
+        else:
+            st.caption("등재된 당사자가 없습니다.")
+        links = view.tx_link_rows(ds, selected)
+        if links:
+            st.markdown("##### 연결된 거래")
+            st.dataframe(links, hide_index=True, width="stretch")
+        st.caption("본 화면은 조사 대상 선별 결과이며, 부인권 성립 여부에 관한 법률적 판단이 아닙니다. 최종 판단은 파산관재인에게 있습니다.")
+    with st.expander("원본 데이터 보기 (감사·검증용)"):
+        st.json({"입력 행": tx, "엔진 결과": asdict(result)})
 st.download_button("전체 사건 결과·입력 근거 저장 (JSON)", export_json(ds, rules, results, current),
                    file_name="trustee-fds-review.json", mime="application/json")
